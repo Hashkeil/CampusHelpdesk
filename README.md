@@ -61,10 +61,16 @@ Integration tests run in an isolated, in-memory PostgreSQL engine and do not use
 
 ## Deploy to Netlify
 
-1. Create a dedicated managed PostgreSQL database. Use the provider's **TLS-verifying** connection string; do not disable certificate verification. Prefer a pooled endpoint for serverless workloads.
-2. Apply `db/001-initial.sql` using a database owner/migration connection. The runtime role should have only the required SELECT/INSERT/UPDATE/DELETE and sequence permissions on these tables, without schema creation or superuser permissions.
+1. Create a [Neon](https://console.neon.tech) project (Postgres 16+, region close to your Netlify Functions region, e.g. `aws-us-east-2`). From **Connect**, copy two connection strings: the **pooled** one (host contains `-pooler`) for the app, and the **direct** one for migrations. Keep `sslmode=require` — do not disable certificate verification.
+2. Apply the schema from your machine with the direct connection:
+
+   ```sh
+   MIGRATION_DATABASE_URL='<direct Neon URL>' DATABASE_URL='<pooled Neon URL>' npm run migrate
+   ```
+
+   For least privilege, create a separate runtime role in Neon with only SELECT/INSERT/UPDATE/DELETE on these tables and use it in the pooled `DATABASE_URL`.
 3. Import this GitHub repository into Netlify. `netlify.toml` configures `public` and `netlify/functions`. This is a Git-based Functions deployment; uploading only `public` will not deploy the backend.
-4. Set server-side environment variables for Functions: `DATABASE_URL`, `APP_ORIGIN` (exact HTTPS origin without a trailing slash), `RATE_LIMIT_SECRET` (random 32+ characters), and `NODE_ENV=production`. Optionally set `ALERT_WEBHOOK_URL` to your team's HTTPS JSON receiver. Never expose these as frontend configuration.
+4. Set server-side environment variables for Functions (Site configuration → Environment variables, scope **Functions**): `DATABASE_URL` (the pooled Neon URL), `APP_ORIGIN` (exact HTTPS origin without a trailing slash), `RATE_LIMIT_SECRET` (random 32+ characters), and `NODE_ENV=production`. Optionally set `ALERT_WEBHOOK_URL` to your team's HTTPS JSON receiver. Never expose these as frontend configuration.
 5. Deploy, register the initial administrator account, and run the admin command locally against the target database using protected environment variables.
 6. Verify registration, login, logout, two-user isolation, staff assignment, CSRF rejection, headers, cookies, alert delivery, and log access on the deployed URL. Review hosting traffic controls, usage limits, monitoring and spend alerts for your actual Netlify plan.
 7. Replace the deployment placeholder above and fill in team names. Keep previews isolated from production data and secrets; their origin must match their own configuration.
