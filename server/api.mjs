@@ -34,6 +34,15 @@ async function alert(db, event, requestId) {
     console.error(JSON.stringify({ event: 'alert_delivery_failed', requestId }));
   }
 }
+let lastCleanup = 0;
+async function cleanup(db) {
+  if (Date.now() - lastCleanup < 60000) return;
+  lastCleanup = Date.now();
+  try {
+    await db.query('DELETE FROM rate_limits WHERE expires_at<now()');
+    await db.query("DELETE FROM sessions WHERE expires_at<now()-interval '1 day'");
+  } catch (error) { console.error(JSON.stringify({ event: 'cleanup_failed', message: error.message })); }
+}
 export const handler = event => handle(event);
 export const createTestHandler = store => event => handle(event, store);
 async function handle(event, store) {
@@ -60,6 +69,7 @@ async function handle(event, store) {
     const url = new URL(event.rawUrl || event.path, origin);
     const path = url.pathname.replace(/^\/(?:\.netlify\/functions\/api|api)(?=\/|$)/, '') || '/';
     db = store || database();
+    await cleanup(db);
     // Only Netlify's platform-provided client IP is trusted in production.
     const ip = production ? (h['x-nf-client-connection-ip'] || 'unknown') : 'local';
     const ipKey = rateKey(secret, `ip:${ip}`);
@@ -69,7 +79,6 @@ async function handle(event, store) {
       const address = email(input.email);
       const pass = password(input.password);
       requireValue(await bump(db, rateKey(secret, `auth-ip:${ip}`), 900) <= 20, 429, 'Too many sign-in attempts. Try again later.');
-      requireValue(await bump(db, rateKey(secret, `auth-email:${address}`), 900) <= 10, 429, 'Too many sign-in attempts. Try again later.');
       if (path.endsWith('register')) {
         const name = text(input.name, 2, 80);
         const encoded = await hashPassword(pass);
@@ -83,7 +92,8 @@ async function handle(event, store) {
       const valid = await verifyPassword(pass, account?.password_hash || await dummyHash);
       if (!account || !valid || account.blocked) {
         await audit(db, 'login_failed', requestId);
-        if (await bump(db, rateKey(secret, `failed:${ip}`), 900) === 5) await alert(db, 'repeated_login_failures', requestId);
+        requireValue(await bump(db, rateKey(secret, `failures-email:${address}`), 900) <= 10, 429, 'Too many sign-in attempts. Try again later.');
+        if (await bump(db, rateKey(secret, `failures-ip:${ip}`), 900) === 5) await alert(db, 'repeated_login_failures', requestId);
         throw new HttpError(401, 'Email or password is incorrect.');
       }
       const sessionToken = token(), csrfToken = token();
@@ -102,6 +112,7 @@ async function handle(event, store) {
     requireValue(session, 401, 'Please sign in.');
     user = publicUser(session);
     if (method !== 'GET') requireValue(equal(h['x-csrf-token'], session.csrf_token), 403, 'Invalid security token. Refresh and try again.');
+    if (method === 'GET') requireValue(await bump(db, rateKey(secret, `read:${user.id}`), 60) <= 120, 429, 'Too many requests. Try again later.');
     if (path === '/auth/me' && method === 'GET') return response(200, { user, csrfToken: session.csrf_token });
     if (path === '/auth/logout' && method === 'POST') {
       fields(input, []);
@@ -155,6 +166,7 @@ async function handle(event, store) {
       }
       if (method === 'PATCH' && !ticketMatch[2]) {
         requireValue(['staff','admin'].includes(user.role),403,'Staff access required.');
+        requireValue(await bump(db, rateKey(secret, `update:${user.id}`), 60) <= 30, 429, 'Update limit reached.');
         fields(input, user.role === 'admin' ? ['status','assignedTo'] : ['status']);
         const status = choice(input.status,['open','in_progress','resolved']);
         const assignee = input.assignedTo === undefined ? ticket.assigned_to : (input.assignedTo === null ? null : uuid(input.assignedTo));
@@ -179,6 +191,7 @@ async function handle(event, store) {
       }
       const match = path.match(/^\/admin\/users\/([^/]+)$/);
       if (match && method === 'PATCH') {
+        requireValue(await bump(db, rateKey(secret, `update:${user.id}`), 60) <= 30, 429, 'Update limit reached.');
         const id = uuid(match[1]); fields(input,['role','blocked']);
         const role = choice(input.role,['student','staff','admin']);
         requireValue(typeof input.blocked === 'boolean');

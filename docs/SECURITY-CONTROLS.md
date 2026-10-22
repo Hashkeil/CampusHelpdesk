@@ -12,7 +12,7 @@ Mappings describe relevant weaknesses, not blanket CWE compliance. Review the im
 | Session management / CWE-384, CWE-613 | Random 256-bit opaque tokens; only token hashes stored; 8-hour expiry; one session per user; revocation on logout/block/role update | Session rotation, expiry and revocation tests; fixed absolute lifetime |
 | Cookies / CWE-614, CWE-1004 | Production Secure, HttpOnly, SameSite=Strict, Path=/, no Domain, __Host prefix | Cookie unit tests; inspect production browser cookies after deployment |
 | Input validation / CWE-20 | Allowed fields, lengths, enums, UUIDs, request sizes; DB constraints | Unknown privilege fields and invalid data rejected; validation is not the SQL/XSS defense |
-| Resource exhaustion / CWE-400, CWE-770 | Shared atomic DB rate counters; per-account authentication throttling; bounded bodies, lists, queries and connection pool | API tests for 429 and 413; counters are not an edge DDoS shield |
+| Resource exhaustion / CWE-400, CWE-770 | Shared atomic DB rate counters on every request class (global reads, authentication, failed logins, ticket creation, replies, status updates); expired counters and sessions purged automatically; bounded bodies, lists, queries and connection pool | API tests for 429 and 413; counters are not an edge DDoS shield |
 | Logging / CWE-778 | Structured audit table; sensitive mutations and logs share a transaction; generic client errors and correlation IDs | No passwords, cookies, ticket text or email addresses in audit records; account IDs can still be personal data |
 | Alerting | Fifth failed login per source/15 minutes creates one alert; HTTPS webhook with timeout, redirects disabled, recorded result | Unconfigured alerts visible in admin UI; delivery not assumed; no durable retries yet |
 | Information exposure / CWE-209 | Generic login errors; generic duplicate-registration response; generic server failure details | Functional tests; this is not a guarantee of indistinguishable timing |
@@ -25,7 +25,9 @@ Allowlists enforce allowed roles, priorities, categories, statuses, request prop
 ## Abuse controls
 
 - General API: 120 requests per source per minute.
-- Authentication: 20 attempts per source and 10 per normalized email per 15 minutes.
+- Reading (every GET endpoint): 120 per account per minute.
+- Authentication: 20 attempts per source per 15 minutes; 10 failed attempts per normalized email per 15 minutes (successful sign-ins never count against the email limit, so attacks cannot blacklist a known user).
+- Ticket status/assignment updates: 30 per account per minute.
 - Ticket creation: 20 per account per hour.
 - Replies: 60 per account per hour.
 - API body: 16 KiB; ticket text: 4,000 characters; reply: 2,000.
@@ -36,7 +38,7 @@ Source addresses are HMAC-pseudonymized before rate-counter storage. Only Netlif
 
 ## Operations and retention
 
-Schedule operator-reviewed cleanup of expired `sessions` and `rate_limits`. Agree a retention period for `audit_events` and `security_alerts` (for example 30 days for the lab), then enforce it operationally. Cleanup is not automated in this version. Monitor database availability, capacity, alert failures and hosting usage. Limit audit access and do not place real secrets in tickets.
+Housekeeping is automated: expired `rate_limits` counters and `sessions` that expired more than one day ago are deleted opportunistically (at most once per minute per function instance) while serving traffic. Agree a retention period for `audit_events` and `security_alerts` (for example 30 days for the lab) and enforce it operationally. Monitor database availability, capacity, alert failures and hosting usage. Limit audit access and do not place real secrets in tickets.
 
 Webhook delivery is best effort, synchronous and deduplicated per threshold window. A failed delivery remains visible and emits a redacted platform-log event. A production system should add a durable queue, retries, a dead-letter workflow and independent monitoring. No configured destination means **not_configured**, not delivered.
 
