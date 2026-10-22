@@ -103,11 +103,15 @@ async function handle(event, store) {
         });
         return response(202, { message: 'If this address is available, your account is ready. You can now sign in.' });
       }
+      // Enforce the per-account limit before checking the password, so the right password cannot get through once the limit is hit.
+      const failKey = rateKey(secret, `failures-email:${address}`);
+      const priorFailures = (await db.query('SELECT hits FROM rate_limits WHERE key=$1 AND expires_at>now()', [failKey])).rows[0]?.hits || 0;
+      requireValue(priorFailures < 10, 429, 'Too many sign-in attempts. Try again later.');
       const account = (await db.query('SELECT * FROM users WHERE email=$1', [address])).rows[0];
       const valid = await verifyPassword(pass, account?.password_hash || await dummyHash);
       if (!account || !valid || account.blocked) {
         await audit(db, 'login_failed', requestId);
-        requireValue(await bump(db, rateKey(secret, `failures-email:${address}`), 900) <= 10, 429, 'Too many sign-in attempts. Try again later.');
+        requireValue(await bump(db, failKey, 900) <= 10, 429, 'Too many sign-in attempts. Try again later.');
         if (await bump(db, rateKey(secret, `failures-ip:${ip}`), 900) === 5) await alert(db, 'repeated_login_failures', requestId);
         throw new HttpError(401, 'Email or password is incorrect.');
       }
@@ -244,7 +248,8 @@ async function handle(event, store) {
         return response(201, { message: internal ? 'Internal note added.' : 'Reply added.' });
       }
       if (method === 'PATCH' && !ticketMatch[2]) {
-        requireValue(['staff','admin'].includes(user.role),403,'Staff access required.');
+        // Only admins or the assigned staff member may change a ticket; staff cannot edit tickets they merely own.
+        requireValue(user.role === 'admin' || (user.role === 'staff' && ticket.assigned_to === user.id),403,'Staff access required.');
         requireValue(await bump(db, rateKey(secret, `update:${user.id}`), 60) <= 30, 429, 'Update limit reached.');
         fields(input, user.role === 'admin' ? ['status','assignedTo'] : ['status']);
         const status = choice(input.status,['open','in_progress','resolved']);

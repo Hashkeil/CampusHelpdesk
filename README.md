@@ -19,7 +19,7 @@ Students can create private tickets, follow their progress and reply to the supp
 ## What the app does
 
 - Students can register, sign in, create tickets and view their own conversations.
-- Staff can view their own or assigned tickets, reply and update ticket status.
+- Staff can view their own or assigned tickets and reply. They can update ticket status only when assigned to that ticket.
 - Support staff can add internal notes that are hidden from the requester, including when the requester is a staff member.
 - Administrators can assign tickets, search users, change roles, block accounts and sign other users out remotely.
 - The admin dashboard shows ticket workload, unassigned requests and recent security activity.
@@ -49,6 +49,8 @@ Security checks run on the server, even when the interface also validates input.
 | Password recovery | Reset tokens are hashed, expire after 30 minutes and work once. A completed reset invalidates existing sessions. |
 
 We do not rely on a blacklist of SQL keywords or HTML tags. Parameterized queries, safe rendering and explicit validation handle those inputs without treating legitimate support text as executable code.
+
+After ten failed logins for an email address, new sign-ins for that address are blocked until the 15-minute failure window expires, including attempts with the correct password. Existing sessions remain valid. This limits guessing but can also temporarily lock out a legitimate user targeted by an attacker.
 
 Application rate limits help with abuse and resource exhaustion, but they do not guarantee protection against DDoS attacks. Hosting-level protection and monitoring are still needed. This project also does not claim to prevent every known CWE.
 

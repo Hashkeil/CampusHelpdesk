@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { createTestHandler } from '../server/api.mjs';
+import { rateKey } from '../server/security.mjs';
 process.env.APP_ORIGIN = 'http://localhost:8888';
 process.env.RATE_LIMIT_SECRET = 'integration-only-secret-with-at-least-32-characters';
 process.env.NODE_ENV = 'test';
@@ -64,6 +65,16 @@ test('API security boundaries against an embedded PostgreSQL engine', async t =>
       assert.equal((await call(`/tickets/${ticket.id}/replies`,'POST',{ body:'We are looking into this.' },bob)).statusCode,201);
       assert.equal((await call(`/tickets/${ticket.id}`,'PATCH',{ status:'in_progress' },bob)).statusCode,200);
     });
+    await t.test('staff ownership does not grant ticket update permission',async () => {
+      const result = await call('/tickets','POST',{ title:'Staff support request',body:'A staff member needs technical assistance.',category:'IT support',priority:'normal' },bob);
+      assert.equal(result.statusCode,201);
+      const id = result.json.ticket.id;
+      assert.equal((await call(`/tickets/${id}`,'GET',undefined,bob)).statusCode,200);
+      assert.equal((await call(`/tickets/${id}`,'PATCH',{ status:'resolved' },bob)).statusCode,403);
+      assert.equal((await db.query('SELECT status FROM tickets WHERE id=$1',[id])).rows[0].status,'open');
+      await db.query('UPDATE tickets SET assigned_to=$1 WHERE id=$2',[bob.id,id]);
+      assert.equal((await call(`/tickets/${id}`,'PATCH',{ status:'in_progress' },bob)).statusCode,200);
+    });
     await t.test('internal staff notes are hidden from the requester',async () => {
       await db.query('DELETE FROM rate_limits');
       const before = (await call('/tickets','GET',undefined,alice)).json.tickets.find(item => item.id === ticket.id).updated_at;
@@ -80,6 +91,19 @@ test('API security boundaries against an embedded PostgreSQL engine', async t =>
       assert.equal((await db.query("SELECT count(*)::int AS count FROM audit_events WHERE event='ticket_internal_note' AND target_id=$1",[ticket.id])).rows[0].count,1);
       const own = (await call('/tickets','POST',{ title:'Staff member request',body:'A staff member needs help too.',category:'Other',priority:'low' },bob)).json.ticket;
       assert.equal((await call(`/tickets/${own.id}/replies`,'POST',{ body:'Hidden from myself?',internal:true },bob)).statusCode,400);
+    });
+    await t.test('login cooldown blocks correct credentials until the failure window expires',async () => {
+      await db.query('DELETE FROM rate_limits');
+      const key = rateKey(process.env.RATE_LIMIT_SECRET, 'failures-email:alice@example.com');
+      await db.query("INSERT INTO rate_limits(key,hits,expires_at) VALUES($1,9,now()+interval '15 minutes')", [key]);
+      assert.equal((await call('/auth/login','POST',{ email:'alice@example.com',password:'this password is incorrect' })).statusCode,401);
+      const blocked = await call('/auth/login','POST',{ email:'ALICE@example.com',password:pass });
+      assert.equal(blocked.statusCode,429);
+      assert.equal(blocked.headers['Set-Cookie'],undefined);
+      assert.equal((await call('/auth/me','GET',undefined,alice)).statusCode,200);
+      await db.query("UPDATE rate_limits SET expires_at=now()-interval '1 second' WHERE key=$1", [key]);
+      alice = await login('alice@example.com');
+      await db.query('DELETE FROM rate_limits');
     });
     await t.test('password changes require the current password and revoke old sessions',async () => {
       await db.query('DELETE FROM rate_limits');

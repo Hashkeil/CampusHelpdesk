@@ -117,7 +117,7 @@ async function loadTicket(id) {
   const detail = $('#detail'); detail.replaceChildren();
   const card = node('article','panel detail-card');
   card.append(node('span',`badge ${ticket.status}`,statusLabel(ticket.status)),node('p','detail-meta',`${ticket.category} · ${ticket.priority} priority · ${new Date(ticket.created_at).toLocaleString()}`),node('h1','',ticket.title),node('p','detail-body',ticket.body));
-  if (['staff','admin'].includes(currentUser.role)) {
+  if (currentUser.role === 'admin' || (currentUser.role === 'staff' && ticket.assigned_to === currentUser.id)) {
     const form = node('form','reply-form'); const status = selectField('Status',[['open','Open'],['in_progress','In progress'],['resolved','Resolved']],ticket.status); form.append(status.wrapper);
     let assignee;
     if (currentUser.role === 'admin') {
