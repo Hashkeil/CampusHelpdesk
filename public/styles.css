@@ -16,3 +16,4 @@
 #user-filters input{width:200px}#user-filters select,#event-filters select{width:160px}
 #user-filters input,#user-filters select,#event-filters select{font-size:11px;padding:9px}
 @media (max-width:760px){.overview-columns{grid-template-columns:1fr}}
+.attachments .log-row span{display:flex;flex-direction:column;gap:4px}.attachments .log-row a{white-space:nowrap}.attachments .reply-form{padding-top:10px}

@@ -6,10 +6,11 @@ http.createServer(async (req,res) => {
   try {
     const path = new URL(req.url,'http://localhost:8888').pathname;
     if (path.startsWith('/api/')) {
+      const limit = req.method === 'POST' && /^\/api\/tickets\/[^/]+\/attachments\/?$/.test(path) ? 5 * 1024 * 1024 : 16384;
       const chunks = []; let size = 0;
-      for await (const chunk of req) { size += chunk.length; if (size > 16384) { res.writeHead(413); res.end('Request too large'); return; } chunks.push(chunk); }
-      const result = await handler({ httpMethod:req.method, headers:req.headers, rawUrl:`http://localhost:8888${req.url}`, body:Buffer.concat(chunks).toString() });
-      res.writeHead(result.statusCode,result.headers); res.end(result.body); return;
+      for await (const chunk of req) { size += chunk.length; if (size > limit) { res.writeHead(413); res.end('Request too large'); return; } chunks.push(chunk); }
+      const result = await handler({ httpMethod:req.method, headers:req.headers, rawUrl:`http://localhost:8888${req.url}`, body:Buffer.concat(chunks).toString(), isBase64Encoded:false });
+      res.writeHead(result.statusCode,result.headers); res.end(result.isBase64Encoded ? Buffer.from(result.body,'base64') : result.body); return;
     }
     const asset = assets.get(path);
     if (!asset || req.method !== 'GET') { res.writeHead(404); res.end('Not found'); return; }

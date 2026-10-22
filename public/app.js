@@ -127,6 +127,34 @@ async function loadTicket(id) {
     const save = node('button','button secondary','Update request'); save.type = 'submit'; form.append(save);
     form.addEventListener('submit',action(async event => { event.preventDefault(); await busy(form,async () => { await api(`/tickets/${id}`,'PATCH',{ status:status.select.value,...(assignee ? { assignedTo:assignee.select.value || null } : {}) }); await loadTicket(id); notice('Request updated.'); }); })); card.append(form);
   }
+  const { attachments } = await api(`/tickets/${id}/attachments`);
+  const files = node('section','attachments');
+  files.append(node('h2','section-title',`Attachments (${attachments.length}/5)`));
+  if (!attachments.length) files.append(node('p','muted','No files attached. Screenshots and documents up to 3 MB are welcome.'));
+  for (const file of attachments) {
+    const row = node('div','log-row'), label = node('span');
+    label.append(node('strong','',file.name),node('small','',`${formatSize(file.size)} · ${new Date(file.created_at).toLocaleString()}`));
+    const link = node('a','button secondary small','Download'); link.href = `/api/tickets/${id}/attachments/${file.id}`; link.setAttribute('download',file.name);
+    row.append(label,link); files.append(row);
+  }
+  if (attachments.length < 5) {
+    const upload = node('form','reply-form'), picker = node('input');
+    picker.type = 'file'; picker.accept = '.png,.jpg,.jpeg,.pdf,.txt,.csv'; picker.required = true;
+    const attach = node('button','button secondary','Attach file →'); attach.type = 'submit';
+    upload.append(picker,attach);
+    upload.addEventListener('submit',action(async event => {
+      event.preventDefault();
+      const file = picker.files[0];
+      if (file.size > 3 * 1024 * 1024) { notice('Attachments are limited to 3 MB.',true); return; }
+      await busy(upload,async () => {
+        const data = await new Promise((resolve,reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = () => reject(reader.error ?? new Error('The file could not be read.')); reader.readAsDataURL(file); });
+        await api(`/tickets/${id}/attachments`,'POST',{ name:file.name, data });
+        notice('Attachment stored.'); await loadTicket(id);
+      });
+    }));
+    files.append(upload);
+  }
+  card.append(files);
   card.append(node('h2','section-title','Conversation'));
   if (!replies.length) card.append(node('p','muted','No replies yet. Updates will appear here.'));
   for (const reply of replies) { const item = node('article',reply.internal ? 'reply internal' : 'reply'); item.append(node('strong','',reply.author),node('small','',new Date(reply.created_at).toLocaleString())); if (reply.internal) item.append(node('span','badge internal','Internal note')); item.append(node('p','reply-text',reply.body)); card.append(item); }
@@ -142,6 +170,7 @@ async function loadTicket(id) {
   card.append(form); detail.append(card); view('detail');
 }
 const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+const formatSize = bytes => bytes < 1024 ? `${bytes} B` : bytes < 1048576 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
 const when = value => value ? new Date(value).toLocaleString() : 'Never';
 function stat(label, value, hint) { const tile = node('div','stat'); tile.append(node('span','',label),node('strong','',String(value)),node('p','',hint)); return tile; }
 async function loadOverview() {

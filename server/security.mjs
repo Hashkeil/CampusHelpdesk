@@ -41,6 +41,34 @@ export function password(input) {
   return input;
 }
 export function choice(value, allowed) { requireValue(allowed.includes(value)); return value; }
+export const attachmentTypes = {
+  png: { type: 'image/png', magic: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] },
+  jpg: { type: 'image/jpeg', magic: [0xff, 0xd8, 0xff] },
+  pdf: { type: 'application/pdf', magic: [0x25, 0x50, 0x44, 0x46, 0x2d] },
+  txt: { type: 'text/plain; charset=utf-8' },
+  csv: { type: 'text/csv; charset=utf-8' }
+};
+export function attachment(input, maxBytes) {
+  requireValue(input && typeof input.name === 'string' && typeof input.data === 'string', 400, 'Attachment name and data are required.');
+  const name = text(input.name, 1, 120);
+  requireValue(!/[\\/]|\.\./.test(name), 400, 'File names must be simple.');
+  const extension = name.toLowerCase().match(/\.(png|jpe?g|pdf|txt|csv)$/)?.[1]?.replace('jpeg', 'jpg');
+  requireValue(extension, 400, 'Allowed file types: png, jpg, pdf, txt, csv.');
+  requireValue(!/%[0-9a-f]{2}/i.test(name), 400, 'File names must be simple.');
+  requireValue(input.data.length % 4 === 0 && input.data.length <= Math.ceil(maxBytes / 3) * 4, 400, 'Attachment exceeds the 3 MB limit.');
+  requireValue(/^[A-Za-z0-9+/]+={0,2}$/.test(input.data), 400, 'Attachment data must be base64.');
+  const bytes = Buffer.from(input.data, 'base64');
+  requireValue(bytes.length >= 1 && bytes.length <= maxBytes, 400, 'Attachment exceeds the 3 MB limit.');
+  const entry = attachmentTypes[extension];
+  if (entry.magic) {
+    for (let index = 0; index < entry.magic.length; index++) requireValue(bytes[index] === entry.magic[index], 400, 'The file contents do not match its extension.');
+  } else {
+    requireValue(!bytes.includes(0) && bytes.length <= maxBytes, 400, 'Only UTF-8 text files are accepted.');
+    try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+    catch { throw new HttpError(400, 'Only UTF-8 text files are accepted.'); }
+  }
+  return { name, type: entry.type, bytes };
+}
 export function uuid(value) { requireValue(typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)); return value; }
 export function mayRead(user, ticket) {
   return user.role === 'admin' || user.id === ticket.owner_id || (user.role === 'staff' && user.id === ticket.assigned_to);

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { database } from './db.mjs';
-import { HttpError, requireValue, token, digest, rateKey, equal, hashPassword, verifyPassword, fields, text, email, password, choice, uuid, mayRead, sessionCookie, readCookie, headers } from './security.mjs';
+import { HttpError, requireValue, token, digest, rateKey, equal, hashPassword, verifyPassword, fields, text, email, password, choice, uuid, mayRead, sessionCookie, readCookie, headers, attachment } from './security.mjs';
 
 const dummyHash = hashPassword('not-a-real-account-password');
 const publicUser = u => ({ id: u.id, name: u.name, email: u.email, role: u.role, blocked: u.blocked });
@@ -73,16 +73,18 @@ async function handle(event, store) {
     const method = event.httpMethod;
     requireValue(['GET', 'POST', 'PATCH'].includes(method), 405, 'Method not allowed.');
     const h = Object.fromEntries(Object.entries(event.headers || {}).map(([k,v]) => [k.toLowerCase(),v]));
+    const url = new URL(event.rawUrl || event.path, origin);
+    const path = url.pathname.replace(/^\/(?:\.netlify\/functions\/api|api)(?=\/|$)/, '') || '/';
+    // Attachment uploads carry the encoded file, so only that route gets an expanded body limit.
+    const uploadPost = method === 'POST' && /^\/tickets\/[^/]+\/attachments\/?$/.test(path);
     const raw = Buffer.from(event.body || '', event.isBase64Encoded ? 'base64' : 'utf8');
-    requireValue(raw.length <= 16384, 413, 'Request too large.');
+    requireValue(raw.length <= (uploadPost ? 5 * 1024 * 1024 : 16384), 413, 'Request too large.');
     if (method !== 'GET') {
       requireValue(h.origin === origin && h['x-campus-request'] === '1', 403, 'Request origin rejected.');
       requireValue((h['content-type'] || '').split(';')[0].trim() === 'application/json', 415, 'JSON required.');
     }
     let input = {};
     if (method !== 'GET') { try { input = JSON.parse(raw.toString('utf8')); } catch { throw new HttpError(400, 'Invalid JSON.'); } }
-    const url = new URL(event.rawUrl || event.path, origin);
-    const path = url.pathname.replace(/^\/(?:\.netlify\/functions\/api|api)(?=\/|$)/, '') || '/';
     db = store || database();
     await cleanup(db);
     // Only Netlify's platform-provided client IP is trusted in production.
@@ -260,6 +262,39 @@ async function handle(event, store) {
           await audit(client,'ticket_updated',requestId,user.id,id);
         });
         return response(200,{ message: 'Ticket updated.' });
+      }
+    }
+    const attachmentMatch = path.match(/^\/tickets\/([^/]+)\/attachments(?:\/([^/]+))?\/?$/);
+    if (attachmentMatch) {
+      const id = uuid(attachmentMatch[1]);
+      const ticket = (await db.query('SELECT * FROM tickets WHERE id=$1', [id])).rows[0];
+      if (!ticket || !mayRead(user,ticket)) {
+        await audit(db, 'ticket_access_denied', requestId, user.id, id);
+        throw new HttpError(404, 'Ticket not found.');
+      }
+      if (method === 'GET' && !attachmentMatch[2]) {
+        const { rows } = await db.query('SELECT a.id,a.name,a.content_type,a.uploader_id,octet_length(a.content) AS size,a.created_at FROM attachments a WHERE a.ticket_id=$1 ORDER BY a.created_at', [id]);
+        return response(200, { attachments: rows });
+      }
+      if (method === 'POST' && !attachmentMatch[2]) {
+        fields(input, ['name','data']);
+        const file = attachment(input, 3 * 1024 * 1024);
+        requireValue(await bump(db, rateKey(secret, `upload:${user.id}`), 3600) <= 10, 429, 'Attachment limit reached. Try again later.');
+        const count = (await db.query('SELECT count(*)::int AS count FROM attachments WHERE ticket_id=$1', [id])).rows[0].count;
+        requireValue(count < 5, 400, 'This conversation already has the maximum of 5 attachments.');
+        const attachmentId = randomUUID();
+        await transaction(db, async client => {
+          await client.query('INSERT INTO attachments(id,ticket_id,uploader_id,name,content_type,content) VALUES($1,$2,$3,$4,$5,$6)', [attachmentId,id,user.id,file.name,file.type,file.bytes]);
+          await client.query('UPDATE tickets SET updated_at=now() WHERE id=$1', [id]);
+          await audit(client, 'attachment_uploaded', requestId, user.id, id);
+        });
+        return response(201, { message: 'Attachment stored.', attachment: { id: attachmentId, name: file.name, contentType: file.type, size: file.bytes.length } });
+      }
+      if (method === 'GET' && attachmentMatch[2]) {
+        const attachmentId = uuid(attachmentMatch[2]);
+        const file = (await db.query('SELECT * FROM attachments WHERE id=$1 AND ticket_id=$2', [attachmentId,id])).rows[0];
+        if (!file) { await audit(db, 'attachment_access_denied', requestId, user.id, id); throw new HttpError(404, 'Attachment not found.'); }
+        return { statusCode: 200, headers: { ...headers, 'Content-Type': file.content_type, 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`, 'Cache-Control': 'private, no-store', 'X-Request-Id': requestId }, isBase64Encoded: true, body: Buffer.from(file.content).toString('base64') };
       }
     }
     if (path.startsWith('/admin/')) {
