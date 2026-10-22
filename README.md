@@ -24,6 +24,7 @@ Students can create private tickets, follow their progress and reply to the supp
 - Administrators can assign tickets, search users, change roles, block accounts and sign other users out remotely.
 - The admin dashboard shows ticket workload, unassigned requests and recent security activity.
 - Users can change their password or request a password reset. Sending reset emails requires a configured delivery webhook.
+- Every ticket conversation accepts file attachments: screenshots and documents up to 3 MB, with up to 5 files per ticket. Anyone who can read the ticket may also download its attachments.
 
 ## Technologies
 
@@ -47,12 +48,13 @@ Security checks run on the server, even when the interface also validates input.
 | Abuse prevention | Shared database counters limit requests, sign-in attempts and ticket activity. Body-size limits, pagination and query timeouts reduce resource use. |
 | Logging and alerts | Audit records track important actions and failures. Repeated failed logins create an alert; an optional HTTPS webhook can deliver it externally. |
 | Password recovery | Reset tokens are hashed, expire after 30 minutes and work once. A completed reset invalidates existing sessions. |
+| File attachments | Only png, jpg, pdf, txt and csv are accepted. The server reads the actual file magic bytes instead of trusting the claimed type, so an executable renamed to an allowed extension is rejected. Text files must be valid UTF-8. The stored database row enforces its own size limit, downloads are always forced to be attachments with `nosniff`, and upload, listing and download share the ticket access rules. Attempted access to another ticket's attachments is audited. |
 
 We do not rely on a blacklist of SQL keywords or HTML tags. Parameterized queries, safe rendering and explicit validation handle those inputs without treating legitimate support text as executable code.
 
 After ten failed logins for an email address, new sign-ins for that address are blocked until the 15-minute failure window expires, including attempts with the correct password. Existing sessions remain valid. This limits guessing but can also temporarily lock out a legitimate user targeted by an attacker.
 
-Application rate limits help with abuse and resource exhaustion, but they do not guarantee protection against DDoS attacks. Hosting-level protection and monitoring are still needed. This project also does not claim to prevent every known CWE.
+Application rate limits help with abuse and resource exhaustion, but they do not guarantee protection against DDoS attacks. Hosting-level protection and monitoring are still needed. Attachments are deliberately limited to mundane document types, so the app never stores SVG, HTML or archive files. This project also does not claim to prevent every known CWE.
 
 ## Run locally
 
@@ -107,4 +109,10 @@ npm run admin -- your-email@example.com
 Sign in again to access the admin features. Other users register as students; an administrator can assign staff roles through **People**. There are no preset admin credentials.
 
 The Docker password is only for local development. Local HTTP uses a development cookie without `Secure`; the deployed app requires HTTPS and uses the production cookie settings.
+
+## Verification
+
+`npm run check` reviews the syntax, `npm test` covers the password, cookie and validation helpers, and `npm run test:integration` runs the API against an embedded PostgreSQL engine, in isolation from any real database. The integration suite covers SQL and XSS payload handling, ownership and staff-assignment rules, CSRF and origin rejection, session rotation and revocation, the login cooldown, password change and reset flows, rate limiting, body-size limits, opening a ticket from another account, and the complete attachment pipeline: allowed types, magic-byte mismatch rejection, ownership denial and the download round-trip.
+
+These tests are regression evidence for the lab, not a certificate that the application is unexploitable.
 
