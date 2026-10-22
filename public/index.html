@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Campus Helpdesk — a private space for campus support.">
+  <title>Campus Helpdesk</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Campus Helpdesk home"><span class="mark">c.</span><span>campus<span class="brand-sub">HELPDESK</span></span></a>
+    <p class="nav-label">YOUR WORKSPACE</p>
+    <nav aria-label="Main navigation">
+      <button id="nav-tickets" class="nav-item active" type="button">▦ <span>Support tickets</span></button>
+      <button id="nav-users" class="nav-item" type="button" hidden>◎ <span>People</span></button>
+      <button id="nav-security" class="nav-item" type="button" hidden>◇ <span>Security activity</span></button>
+    </nav>
+    <div class="sidebar-bottom"><span class="live-dot"></span> A little help. A better campus.<p>Web Security Lab · Student project</p></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><span>Workspace <span class="slash">/</span> <strong id="breadcrumb">Welcome</strong></span><div class="account"><span id="account-label">Campus community</span><button id="logout" class="button small secondary" hidden>Sign out</button></div></header>
+    <main id="main">
+      <div id="notice" role="status" aria-live="polite" hidden></div>
+      <section id="auth-view" class="auth-layout">
+        <div class="intro"><p class="eyebrow">HERE TO HELP</p><h1>Less friction.<br>More campus life.</h1><p class="lead">From a Wi-Fi hiccup to a study-space question, get the support you need in one place.</p><div class="intro-note"><span class="note-icon">↗</span><div><strong>Your request, in the right hands.</strong><p>Follow updates, talk to your support team, and keep everything together.</p></div></div><div class="abstract" aria-hidden="true"><span>hello.</span><div class="orbit"></div><div class="tile">↗</div></div></div>
+        <div class="auth-card"><p class="eyebrow">YOUR CAMPUS ACCOUNT</p><h2 id="auth-title">Welcome back.</h2><p id="auth-description" class="muted">Sign in to check in on your requests.</p>
+          <form id="auth-form">
+            <label id="name-field" hidden>Full name<input name="name" autocomplete="name" minlength="2" maxlength="80"></label>
+            <label>Email address<input name="email" type="email" autocomplete="username" maxlength="254" placeholder="you@university.edu" required></label>
+            <label>Password<input name="password" type="password" autocomplete="current-password" minlength="15" maxlength="128" required><span class="hint">Use a passphrase of 15–128 characters.</span></label>
+            <button id="auth-submit" class="button primary" type="submit">Sign in <span>→</span></button>
+          </form>
+          <p class="auth-switch"><span id="auth-switch-label">New to Campus Helpdesk?</span> <button id="auth-toggle" class="text-button">Create an account</button></p>
+          <p class="auth-footnote">Please use a unique password and avoid submitting sensitive personal information.</p>
+        </div>
+      </section>
+      <section id="tickets-view" hidden>
+        <div class="page-heading"><div><p class="eyebrow">LET’S GET IT SORTED</p><h1>Your support space.</h1><p class="muted">Every question deserves a next step.</p></div><button id="new-ticket" class="button primary">＋ New request</button></div>
+        <div class="summary"><div><span>YOUR WORKSPACE</span><strong id="welcome-name">Welcome</strong><p>Support that stays connected.</p></div><div><span>VISIBLE ON THIS PAGE</span><strong id="ticket-count">0 requests</strong><p>Private conversations with your team.</p></div><div><span>A GOOD REQUEST GOES A LONG WAY</span><p>Include what happened, when it started, and what you’ve already tried.</p></div></div>
+        <section class="panel"><div class="panel-top"><h2>Support requests</h2><form id="filters"><label class="sr-only" for="search">Search request titles</label><input id="search" name="search" placeholder="Search requests…" maxlength="100"><label class="sr-only" for="status">Filter status</label><select id="status" name="status"><option value="">All statuses</option><option value="open">Open</option><option value="in_progress">In progress</option><option value="resolved">Resolved</option></select><button class="button secondary small">Apply</button></form></div><div id="ticket-list"></div><div class="pagination"><button id="previous" class="button secondary small">← Previous</button><span id="page-label">Page 1</span><button id="next" class="button secondary small">Next →</button></div></section>
+      </section>
+      <section id="detail-view" hidden><button id="back" class="text-button">← Back to requests</button><div id="detail"></div></section>
+      <section id="users-view" hidden><div class="page-heading"><div><p class="eyebrow">ADMINISTRATION</p><h1>People & access.</h1><p class="muted">Role or blocking changes revoke the account’s sessions.</p></div></div><div id="users-list" class="panel"></div></section>
+      <section id="security-view" hidden><div class="page-heading"><div><p class="eyebrow">ADMINISTRATION</p><h1>Security activity.</h1><p class="muted">Recent recorded events and notification delivery states.</p></div></div><div id="security-content"></div></section>
+      <footer>Campus Helpdesk <span>Built for a more connected campus.</span></footer>
+    </main>
+  </div>
+  <dialog id="ticket-dialog"><form id="ticket-form"><div class="dialog-heading"><h2>A new request.</h2><button id="close-dialog" type="button" class="text-button" aria-label="Close new request">✕</button></div><p class="muted">Give your support team a little context.</p><label>Subject<input name="title" minlength="3" maxlength="120" required placeholder="How can we help?"></label><div class="form-row"><label>Category<select name="category"><option>IT support</option><option>Facilities</option><option>Academic</option><option>Other</option></select></label><label>Priority<select name="priority"><option value="low">Low</option><option value="normal" selected>Normal</option><option value="high">High</option></select></label></div><label>What’s happening?<textarea name="body" minlength="10" maxlength="4000" rows="6" required placeholder="Describe the issue and any useful details."></textarea></label><p id="ticket-error" role="alert"></p><button class="button primary" type="submit">Send request →</button></form></dialog>
+</body>
+</html>
