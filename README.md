@@ -6,6 +6,8 @@ Students can create private tickets, follow their progress and reply to the supp
 
 **Live app:** [campushelpdeskteam.netlify.app](https://campushelpdeskteam.netlify.app/)
 
+The full project overview and security design write-up is in [SECURITY-REPORT.md](SECURITY-REPORT.md).
+
 
 ## Our team
 
