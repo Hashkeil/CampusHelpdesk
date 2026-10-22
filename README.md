@@ -6,10 +6,12 @@ A campus support application built for a Web Security Lab assessment. Students s
 
 ## Team
 
-| Name | Student ID | Contribution |
-| --- | --- | --- |
-| Add team member | Add ID if required | Add contribution |
-| Add team member | Add ID if required | Add contribution |
+| Name | Student ID |
+| --- | --- |
+| Muaz Ahmed | if24b241 |
+| Mohamed Amin Kasmi | if24b120 |
+| Mahmoud Hashkeil | if25b198 |
+| Mateo Lamthi | if23b263
 
 ## Stack
 
