@@ -8,6 +8,7 @@ process.env.RATE_LIMIT_SECRET = 'integration-only-secret-with-at-least-32-charac
 process.env.NODE_ENV = 'test';
 delete process.env.NETLIFY;
 delete process.env.ALERT_WEBHOOK_URL;
+delete process.env.PASSWORD_RESET_WEBHOOK_URL;
 
 test('API security boundaries against an embedded PostgreSQL engine', async t => {
   const engine = new PGlite();
@@ -79,6 +80,72 @@ test('API security boundaries against an embedded PostgreSQL engine', async t =>
       assert.equal((await db.query("SELECT count(*)::int AS count FROM audit_events WHERE event='ticket_internal_note' AND target_id=$1",[ticket.id])).rows[0].count,1);
       const own = (await call('/tickets','POST',{ title:'Staff member request',body:'A staff member needs help too.',category:'Other',priority:'low' },bob)).json.ticket;
       assert.equal((await call(`/tickets/${own.id}/replies`,'POST',{ body:'Hidden from myself?',internal:true },bob)).statusCode,400);
+    });
+    await t.test('password changes require the current password and revoke old sessions',async () => {
+      await db.query('DELETE FROM rate_limits');
+      await register('carol@example.com'); const carol = await login('carol@example.com');
+      const newPass = 'a brand new campus passphrase';
+      assert.ok(Date.parse((await call('/auth/me','GET',undefined,carol)).json.sessionExpiresAt) > Date.now());
+      assert.equal((await call('/auth/password','POST',{ currentPassword:pass,newPassword:newPass,role:'admin' },carol)).statusCode,400);
+      assert.equal((await call('/auth/password','POST',{ currentPassword:pass,newPassword:'too short' },carol)).statusCode,400);
+      assert.equal((await call('/auth/password','POST',{ currentPassword:pass,newPassword:pass },carol)).statusCode,400);
+      const wrong = await call('/auth/password','POST',{ currentPassword:'not the right password at all',newPassword:newPass },carol);
+      assert.equal(wrong.statusCode,400); assert.equal((await call('/auth/me','GET',undefined,carol)).statusCode,200);
+      const changed = await call('/auth/password','POST',{ currentPassword:pass,newPassword:newPass },carol);
+      assert.equal(changed.statusCode,200);
+      const rotated = { cookie:changed.headers['Set-Cookie'].split(';')[0],csrf:changed.json.csrfToken };
+      assert.notEqual(rotated.cookie,carol.cookie);
+      assert.equal((await call('/auth/me','GET',undefined,carol)).statusCode,401);
+      assert.equal((await call('/auth/me','GET',undefined,rotated)).statusCode,200);
+      assert.equal((await call('/auth/logout','POST',{},{ cookie:rotated.cookie,csrf:carol.csrf })).statusCode,403);
+      assert.equal((await call('/auth/login','POST',{ email:'carol@example.com',password:pass })).statusCode,401);
+      const events = (await db.query("SELECT event FROM audit_events WHERE actor_id=$1 AND event LIKE 'password%' ORDER BY id",[carol.id])).rows.map(row => row.event);
+      assert.deepEqual(events,['password_change_failed','password_changed']);
+      assert.ok(!JSON.stringify((await db.query('SELECT * FROM audit_events')).rows).includes(newPass));
+      const fresh = (await call('/auth/login','POST',{ email:'carol@example.com',password:newPass }));
+      assert.equal(fresh.statusCode,200);
+      const session = { cookie:fresh.headers['Set-Cookie'].split(';')[0],csrf:fresh.json.csrfToken };
+      let limited;
+      for (let i=0;i<4;i++) limited = await call('/auth/password','POST',{ currentPassword:'guessing the password again',newPassword:'another long passphrase here' },session);
+      assert.equal(limited.statusCode,429);
+    });
+    await t.test('password reset links are single-use, expire and revoke sessions',async () => {
+      await db.query('DELETE FROM rate_limits');
+      await register('dave@example.com'); const dave = await login('dave@example.com');
+      const originalFetch = globalThis.fetch, sent = [];
+      process.env.PASSWORD_RESET_WEBHOOK_URL = 'https://mail.example.test/reset';
+      globalThis.fetch = async (_url,options) => { assert.equal(options.redirect,'error'); sent.push(JSON.parse(options.body)); return { ok:true }; };
+      const forgot = async address => call('/auth/forgot','POST',{ email:address });
+      const linkToken = () => { const match = sent.at(-1).link.match(/^http:\/\/localhost:8888\/#reset=([0-9a-f]{64})$/); assert.ok(match); return match[1]; };
+      try {
+        const missing = await forgot('nobody@example.com');
+        assert.equal(missing.statusCode,202); assert.equal(sent.length,0);
+        const requested = await forgot('dave@example.com');
+        assert.equal(requested.statusCode,202); assert.equal(requested.json.message,missing.json.message);
+        assert.equal(sent.length,1); assert.equal(sent[0].email,'dave@example.com');
+        const first = linkToken();
+        assert.equal((await db.query('SELECT count(*)::int AS count FROM password_resets WHERE token_hash=$1',[first])).rows[0].count,0);
+        await forgot('dave@example.com'); const second = linkToken();
+        const newPass = 'dave recovered his campus passphrase';
+        assert.equal((await call('/auth/reset','POST',{ token:first,password:newPass })).statusCode,400);
+        assert.equal((await call('/auth/reset','POST',{ token:'not-a-token',password:newPass })).statusCode,400);
+        assert.equal((await call('/auth/reset','POST',{ token:second,password:'short' })).statusCode,400);
+        assert.equal((await call('/auth/reset','POST',{ token:second,password:newPass,email:'dave@example.com' })).statusCode,400);
+        assert.equal((await call('/auth/reset','POST',{ token:second,password:newPass })).statusCode,200);
+        assert.equal((await call('/auth/me','GET',undefined,dave)).statusCode,401);
+        assert.equal((await call('/auth/reset','POST',{ token:second,password:'an attacker replaying the link' })).statusCode,400);
+        assert.equal((await call('/auth/login','POST',{ email:'dave@example.com',password:pass })).statusCode,401);
+        assert.equal((await call('/auth/login','POST',{ email:'dave@example.com',password:newPass })).statusCode,200);
+        await forgot('dave@example.com'); const expired = linkToken();
+        await db.query("UPDATE password_resets SET expires_at=now()-interval '1 minute'");
+        assert.equal((await call('/auth/reset','POST',{ token:expired,password:'too late for this reset link' })).statusCode,400);
+        const limited = await forgot('dave@example.com');
+        assert.equal(limited.statusCode,202); assert.equal(sent.length,3);
+        const events = (await db.query("SELECT event FROM audit_events WHERE event LIKE 'password_reset%'")).rows.map(row => row.event);
+        assert.deepEqual(events.sort(),['password_reset_completed','password_reset_requested','password_reset_requested','password_reset_requested']);
+        const logs = JSON.stringify((await db.query('SELECT * FROM audit_events')).rows);
+        assert.ok(!logs.includes(second)); assert.ok(!logs.includes('dave@example.com'));
+      } finally { globalThis.fetch = originalFetch; delete process.env.PASSWORD_RESET_WEBHOOK_URL; }
     });
     await t.test('expired and blocked sessions are rejected',async () => {
       await db.query("UPDATE sessions SET expires_at=now()-interval '1 minute' WHERE user_id=$1",[bob.id]);

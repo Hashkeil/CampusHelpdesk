@@ -9,8 +9,10 @@ Mappings describe relevant weaknesses, not blanket CWE compliance. Review the im
 | CSRF / CWE-352 | Exact origin checks, custom request header, JSON-only writes, session-bound random CSRF token, SameSite=Strict | Tests reject incorrect origins and tokens; login/register use origin/header checks before authentication |
 | Authorization / CWE-862, CWE-639 | Server-side student ownership and staff-assignment checks; admin-only management | Cross-account read/reply and staff tests; no client-provided role accepted at registration |
 | Information exposure / CWE-200 | Internal staff notes filtered in SQL for the requester (including staff who own the ticket); only non-owner staff may send the `internal` field; internal notes do not bump `updated_at` | Integration test checks hidden note body, rejected `internal` field and unchanged timestamp |
+| Credential change / CWE-620 | Password change requires the current password (verified with scrypt); new password follows the same 15–128 policy and must differ; all sessions revoked and a new session and CSRF token issued; failures and successes audited without password material | Integration test covers wrong current password, unchanged reuse, extra fields, old-cookie and old-CSRF rejection, and the attempt limit |
+| Password recovery / CWE-640 | Random 256-bit single-use reset tokens, stored only as hashes, valid 30 minutes; a new request revokes older links; reset revokes every session and outstanding link; same response whether or not the account exists; token sent in the URL fragment and removed from the address bar on load; delivery only to an HTTPS webhook (local development prints the link) | Integration test covers unknown accounts, superseded, replayed, expired and malformed tokens, session revocation and per-email limits; response timing can still differ for existing accounts, and the mail relay behind the webhook is the operator's responsibility |
 | Password storage / CWE-916 | Random salts; scrypt N=32768, r=8, p=3; constant-time verification | Password tests; 15–128 character policy; no MFA or compromised-password service yet |
-| Session management / CWE-384, CWE-613 | Random 256-bit opaque tokens; only token hashes stored; 8-hour expiry; one session per user; revocation on logout/block/role update | Session rotation, expiry and revocation tests; fixed absolute lifetime |
+| Session management / CWE-384, CWE-613 | Random 256-bit opaque tokens; only token hashes stored; 8-hour expiry; one session per user; revocation on logout/block/role update/password change or reset | Session rotation, expiry and revocation tests; fixed absolute lifetime |
 | Cookies / CWE-614, CWE-1004 | Production Secure, HttpOnly, SameSite=Strict, Path=/, no Domain, __Host prefix | Cookie unit tests; inspect production browser cookies after deployment |
 | Input validation / CWE-20 | Allowed fields, lengths, enums, UUIDs, request sizes; DB constraints | Unknown privilege fields and invalid data rejected; validation is not the SQL/XSS defense |
 | Resource exhaustion / CWE-400, CWE-770 | Shared atomic DB rate counters on every request class (global reads, authentication, failed logins, ticket creation, replies, status updates); expired counters and sessions purged automatically; bounded bodies, lists, queries and connection pool | API tests for 429 and 413; counters are not an edge DDoS shield |
@@ -31,6 +33,8 @@ Allowlists enforce allowed roles, priorities, categories, statuses, request prop
 - Ticket status/assignment updates: 30 per account per minute.
 - Ticket creation: 20 per account per hour.
 - Replies: 60 per account per hour.
+- Password changes: 5 attempts per account per 15 minutes, counted before password verification.
+- Password reset: shares the 20-per-source authentication limit; at most 3 reset links per email address per hour (further requests get the same response but send nothing).
 - API body: 16 KiB; ticket text: 4,000 characters; reply: 2,000.
 - Lists: 20 tickets/page, offset capped at 10,000; latest 100 replies, users or audit events; latest 50 alerts.
 - PostgreSQL statement and connection timeouts: 5 seconds; pool capped per function instance.
@@ -45,4 +49,4 @@ Webhook delivery is best effort, synchronous and deduplicated per threshold wind
 
 ## Known scope boundaries
 
-This version does not include email verification, password recovery, MFA, file uploads, real-time messaging, rich HTML, guaranteed notification delivery, or proven distributed-attack resilience. User management and conversations are intentionally capped. Concurrent permission changes may overlap requests already authorized; this should be hardened further before use with sensitive data. Test TLS, headers, trusted client IP, platform limits and webhook behavior on the actual deployment.
+This version does not include email verification, MFA, file uploads, real-time messaging, rich HTML, guaranteed notification delivery, or proven distributed-attack resilience. User management and conversations are intentionally capped. Concurrent permission changes may overlap requests already authorized; this should be hardened further before use with sensitive data. Test TLS, headers, trusted client IP, platform limits and webhook behavior on the actual deployment.

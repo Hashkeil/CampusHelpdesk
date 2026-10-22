@@ -1,5 +1,5 @@
 const $ = selector => document.querySelector(selector);
-let currentUser = null, csrfToken = '', registering = false, offset = 0;
+let currentUser = null, csrfToken = '', registering = false, offset = 0, resetToken = '';
 const statusLabel = value => ({ open:'Open', in_progress:'In progress', resolved:'Resolved' })[value] || value;
 function node(tag, className, content) {
   const element = document.createElement(tag);
@@ -9,9 +9,9 @@ function node(tag, className, content) {
 }
 function notice(message, error = false) { $('#notice').textContent = message; $('#notice').className = error ? 'error' : ''; $('#notice').hidden = false; }
 function view(name) {
-  for (const section of ['auth','tickets','detail','users','security']) $(`#${section}-view`).hidden = section !== name;
-  $('#breadcrumb').textContent = ({ auth:'Welcome',tickets:'Support tickets',detail:'Request details',users:'People',security:'Security activity' })[name];
-  for (const item of ['tickets','users','security']) $(`#nav-${item}`).classList.toggle('active', item === name || (item === 'tickets' && name === 'detail'));
+  for (const section of ['auth','tickets','detail','users','security','account']) $(`#${section}-view`).hidden = section !== name;
+  $('#breadcrumb').textContent = ({ auth:'Welcome',tickets:'Support tickets',detail:'Request details',users:'People',security:'Security activity',account:'Your account' })[name];
+  for (const item of ['tickets','users','security','account']) $(`#nav-${item}`).classList.toggle('active', item === name || (item === 'tickets' && name === 'detail'));
 }
 async function api(path, method = 'GET', data) {
   const result = await fetch(`/api${path}`,{ method, credentials:'same-origin', headers:method === 'GET' ? {} : { 'Content-Type':'application/json','X-Campus-Request':'1','X-CSRF-Token':csrfToken }, ...(data === undefined ? {} : { body:JSON.stringify(data) }) });
@@ -23,7 +23,7 @@ async function api(path, method = 'GET', data) {
   return body;
 }
 function updateAccount() {
-  $('#logout').hidden = !currentUser;
+  $('#logout').hidden = $('#nav-account').hidden = !currentUser;
   $('#account-label').textContent = currentUser ? `${currentUser.name} · ${currentUser.role}` : 'Campus community';
   $('#nav-users').hidden = $('#nav-security').hidden = currentUser?.role !== 'admin';
   if (currentUser) $('#welcome-name').textContent = `Hi, ${currentUser.name.split(' ')[0]}.`;
@@ -44,6 +44,26 @@ $('#auth-toggle').addEventListener('click',() => {
   $('#auth-submit').textContent = registering ? 'Create account →' : 'Sign in →';
   $('#auth-toggle').textContent = registering ? 'Sign in' : 'Create an account';
   $('#auth-switch-label').textContent = registering ? 'Already have an account?' : 'New to Campus Helpdesk?';
+  $('#forgot-link').hidden = registering;
+});
+function authPanel(name) {
+  for (const panel of ['auth','forgot','reset']) $(`#${panel}-form`).hidden = panel !== name;
+  $('#auth-switch-label').parentElement.hidden = $('#forgot-link').hidden = name !== 'auth'; $('#auth-back').hidden = name === 'auth';
+  const [title,description] = ({ auth:['Welcome back.','Sign in to check in on your requests.'],forgot:['Forgot your password?','Enter your account email and we’ll send you a reset link.'],reset:['Choose a new password.','This link works once and expires 30 minutes after it was sent.'] })[name];
+  $('#auth-title').textContent = title; $('#auth-description').textContent = description; $('#reset-error').textContent = '';
+}
+$('#forgot-toggle').addEventListener('click',() => authPanel('forgot'));
+$('#back-to-signin').addEventListener('click',() => { resetToken = ''; authPanel('auth'); });
+$('#forgot-form').addEventListener('submit',action(async event => {
+  event.preventDefault();
+  await busy(event.target,async () => { const result = await api('/auth/forgot','POST',{ email:event.target.elements.email.value }); event.target.reset(); authPanel('auth'); notice(result.message); });
+}));
+$('#reset-form').addEventListener('submit',async event => {
+  event.preventDefault(); const form = event.target; $('#reset-error').textContent = '';
+  try {
+    if (form.elements.password.value !== form.elements.confirmPassword.value) throw new Error('The new passwords do not match.');
+    await busy(form,async () => { const result = await api('/auth/reset','POST',{ token:resetToken,password:form.elements.password.value }); resetToken = ''; form.reset(); authPanel('auth'); notice(result.message); });
+  } catch (error) { $('#reset-error').textContent = error.message; }
 });
 $('#auth-form').addEventListener('submit',action(async event => {
   event.preventDefault();
@@ -145,5 +165,24 @@ $('#nav-security').addEventListener('click',action(async () => {
   }
   view('security');
 }));
-try { const result = await api('/auth/me'); currentUser = result.user; csrfToken = result.csrfToken; updateAccount(); await loadTickets(); }
+$('#nav-account').addEventListener('click',action(async () => {
+  const { user,sessionExpiresAt } = await api('/auth/me'), details = $('#account-details'); details.replaceChildren();
+  for (const [term,value] of [['Name',user.name],['Email',user.email],['Role',user.role],['Session expires',new Date(sessionExpiresAt).toLocaleString()]]) details.append(node('dt','',term),node('dd','',value));
+  $('#password-form').elements.username.value = user.email; $('#password-error').textContent = ''; view('account');
+}));
+$('#password-form').addEventListener('submit',async event => {
+  event.preventDefault(); const form = event.target; $('#password-error').textContent = '';
+  try {
+    if (form.elements.newPassword.value !== form.elements.confirmPassword.value) throw new Error('The new passwords do not match.');
+    await busy(form,async () => { const result = await api('/auth/password','POST',{ currentPassword:form.elements.currentPassword.value,newPassword:form.elements.newPassword.value }); csrfToken = result.csrfToken; form.reset(); notice(result.message); });
+  } catch (error) { $('#password-error').textContent = error.message; }
+});
+// Take the reset token out of the address bar straight away so it does not linger in history or get shared by copy-paste.
+function openResetLink() {
+  const link = location.hash.match(/^#reset=([0-9a-f]{64})$/);
+  if (!link) return false;
+  resetToken = link[1]; history.replaceState(null,'',location.pathname + location.search); $('#notice').hidden = true; view('auth'); authPanel('reset'); return true;
+}
+addEventListener('hashchange',openResetLink);
+if (!openResetLink()) try { const result = await api('/auth/me'); currentUser = result.user; csrfToken = result.csrfToken; updateAccount(); await loadTickets(); }
 catch (error) { view('auth'); if (error.message !== 'Please sign in.') notice(error.message,true); }

@@ -17,6 +17,7 @@
       <button id="nav-tickets" class="nav-item active" type="button">▦ <span>Support tickets</span></button>
       <button id="nav-users" class="nav-item" type="button" hidden>◎ <span>People</span></button>
       <button id="nav-security" class="nav-item" type="button" hidden>◇ <span>Security activity</span></button>
+      <button id="nav-account" class="nav-item" type="button" hidden>○ <span>Your account</span></button>
     </nav>
     <div class="sidebar-bottom"><span class="live-dot"></span> A little help. A better campus.<p>Web Security Lab · Student project</p></div>
   </aside>
@@ -33,6 +34,18 @@
             <label>Password<input name="password" type="password" autocomplete="current-password" minlength="15" maxlength="128" required><span class="hint">Use a passphrase of 15–128 characters.</span></label>
             <button id="auth-submit" class="button primary" type="submit">Sign in <span>→</span></button>
           </form>
+          <p id="forgot-link" class="forgot-link"><button id="forgot-toggle" class="text-button" type="button">Forgot your password?</button></p>
+          <form id="forgot-form" hidden>
+            <label>Email address<input name="email" type="email" autocomplete="username" maxlength="254" placeholder="you@university.edu" required></label>
+            <button class="button primary" type="submit">Send reset link <span>→</span></button>
+          </form>
+          <form id="reset-form" hidden>
+            <label>New password<input name="password" type="password" autocomplete="new-password" minlength="15" maxlength="128" required><span class="hint">Use a passphrase of 15–128 characters.</span></label>
+            <label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="15" maxlength="128" required></label>
+            <p id="reset-error" role="alert"></p>
+            <button class="button primary" type="submit">Set new password <span>→</span></button>
+          </form>
+          <p id="auth-back" class="auth-switch" hidden><button id="back-to-signin" class="text-button" type="button">← Back to sign in</button></p>
           <p class="auth-switch"><span id="auth-switch-label">New to Campus Helpdesk?</span> <button id="auth-toggle" class="text-button">Create an account</button></p>
           <p class="auth-footnote">Please use a unique password and avoid submitting sensitive personal information.</p>
         </div>
@@ -45,6 +58,17 @@
       <section id="detail-view" hidden><button id="back" class="text-button">← Back to requests</button><div id="detail"></div></section>
       <section id="users-view" hidden><div class="page-heading"><div><p class="eyebrow">ADMINISTRATION</p><h1>People & access.</h1><p class="muted">Role or blocking changes revoke the account’s sessions.</p></div></div><div id="users-list" class="panel"></div></section>
       <section id="security-view" hidden><div class="page-heading"><div><p class="eyebrow">ADMINISTRATION</p><h1>Security activity.</h1><p class="muted">Recent recorded events and notification delivery states.</p></div></div><div id="security-content"></div></section>
+      <section id="account-view" hidden><div class="page-heading"><div><p class="eyebrow">YOUR ACCOUNT</p><h1>Account & sign-in.</h1><p class="muted">Changing your password signs out every other session.</p></div></div>
+        <div class="account-grid"><section class="panel"><h2>Profile</h2><dl id="account-details"></dl></section>
+          <section class="panel"><h2>Change password</h2><form id="password-form">
+            <input name="username" autocomplete="username" hidden>
+            <label>Current password<input name="currentPassword" type="password" autocomplete="current-password" maxlength="128" required></label>
+            <label>New password<input name="newPassword" type="password" autocomplete="new-password" minlength="15" maxlength="128" required><span class="hint">Use a passphrase of 15–128 characters.</span></label>
+            <label>Confirm new password<input name="confirmPassword" type="password" autocomplete="new-password" minlength="15" maxlength="128" required></label>
+            <p id="password-error" role="alert"></p>
+            <button class="button primary" type="submit">Change password →</button>
+          </form></section></div>
+      </section>
       <footer>Campus Helpdesk <span>Built for a more connected campus.</span></footer>
     </main>
   </div>
