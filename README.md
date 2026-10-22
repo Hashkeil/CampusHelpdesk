@@ -112,9 +112,5 @@ Sign in again to access the admin features. Other users register as students; an
 
 The Docker password is only for local development. Local HTTP uses a development cookie without `Secure`; the deployed app requires HTTPS and uses the production cookie settings.
 
-## Verification
 
-`npm run check` reviews the syntax, `npm test` covers the password, cookie and validation helpers, and `npm run test:integration` runs the API against an embedded PostgreSQL engine, in isolation from any real database. The integration suite covers SQL and XSS payload handling, ownership and staff-assignment rules, CSRF and origin rejection, session rotation and revocation, the login cooldown, password change and reset flows, rate limiting, body-size limits, opening a ticket from another account, and the complete attachment pipeline: allowed types, magic-byte mismatch rejection, ownership denial and the download round-trip.
-
-These tests are regression evidence for the lab, not a certificate that the application is unexploitable.
 
