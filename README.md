@@ -44,7 +44,7 @@ Open **http://localhost:8888**. Register an account. To make it the initial admi
 npm run admin -- your-email@example.com
 ```
 
-Sign in again. Register separate student and staff accounts, promote the support account through **People**, and assign tickets through their details pages. Staff only see their own or assigned tickets; administrators see all tickets.
+Sign in again. **Admin overview** shows open and unassigned requests, staff workload and the last day's failed sign-ins. Register separate student and staff accounts, promote the support account through **People** (searchable, filterable by role, with remote sign-out), and assign tickets through their details pages. **Security activity** lists alerts and a filterable audit log. Staff only see their own or assigned tickets; administrators see all tickets.
 
 The compose database password is for local development only. The local HTTP cookie intentionally omits `Secure`; production requires HTTPS and uses a `__Host-` cookie. This app is not a browser-only demo: sign-in and tickets require a working database and valid environment configuration.
 

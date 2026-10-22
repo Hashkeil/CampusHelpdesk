@@ -178,6 +178,36 @@ test('API security boundaries against an embedded PostgreSQL engine', async t =>
       assert.equal((await db.query('SELECT * FROM sessions WHERE user_id=$1',[bob.id])).rows.length,0);
       assert.equal((await call(`/admin/users/${alice.id}`,'PATCH',{ role:'student',blocked:false },alice)).statusCode,400);
     });
+    await t.test('admin overview, people search, audit log and remote sign-out are admin-only',async () => {
+      await db.query('DELETE FROM rate_limits');
+      await register('erin@example.com'); const erin = await login('erin@example.com');
+      const created = await call('/tickets','POST',{ title:'Projector broken',body:'The projector in room 2 does not turn on.',category:'Facilities',priority:'high' },erin);
+      for (const path of ['/admin/overview','/admin/users','/admin/assignees','/admin/security']) assert.equal((await call(path,'GET',undefined,erin)).statusCode,403);
+      assert.equal((await call(`/admin/users/${alice.id}/sign-out`,'POST',{},erin)).statusCode,403);
+      const overview = (await call('/admin/overview','GET',undefined,alice)).json;
+      assert.equal(overview.people.total,(await db.query('SELECT count(*)::int AS count FROM users')).rows[0].count);
+      assert.equal(overview.people.blocked,1);
+      assert.ok(overview.waiting.some(item => item.id === created.json.ticket.id && item.priority === 'high'));
+      assert.ok(overview.tickets.unassigned >= 1 && overview.lastDay.failed_sign_ins >= 1);
+      const found = (await call('/admin/users?search=ERIN','GET',undefined,alice)).json.users;
+      assert.deepEqual(found.map(u => u.email),['erin@example.com']); assert.equal(found[0].signed_in,true); assert.equal(found[0].tickets,1); assert.ok(found[0].last_sign_in);
+      assert.deepEqual((await call('/admin/users?role=blocked','GET',undefined,alice)).json.users.map(u => u.email),['bob@example.com']);
+      assert.equal((await call("/admin/users?search="+encodeURIComponent("' OR 1=1 --"),'GET',undefined,alice)).json.users.length,0);
+      assert.equal((await call('/admin/users?role=superuser','GET',undefined,alice)).statusCode,400);
+      assert.equal((await call('/admin/users?offset=-1','GET',undefined,alice)).statusCode,400);
+      assert.ok(!(await call('/admin/assignees','GET',undefined,alice)).json.users.some(u => u.id === bob.id));
+      const log = (await call('/admin/security?event=ticket_created','GET',undefined,alice)).json;
+      assert.ok(log.events.length >= 1 && log.events.every(item => item.event === 'ticket_created'));
+      assert.ok(log.events.some(item => item.actor === 'erin@example.com' && item.target === 'Projector broken'));
+      assert.ok(log.eventTypes.includes('login_success'));
+      assert.equal((await call("/admin/security?event=x'--",'GET',undefined,alice)).statusCode,400);
+      assert.equal((await call(`/admin/users/${alice.id}/sign-out`,'POST',{},alice)).statusCode,400);
+      assert.equal((await call(`/admin/users/${erin.id}/sign-out`,'POST',{ force:true },alice)).statusCode,400);
+      assert.equal((await call('/admin/users/00000000-0000-4000-8000-000000000000/sign-out','POST',{},alice)).statusCode,404);
+      assert.equal((await call(`/admin/users/${erin.id}/sign-out`,'POST',{},alice)).statusCode,200);
+      assert.equal((await call('/auth/me','GET',undefined,erin)).statusCode,401);
+      assert.equal((await db.query("SELECT count(*)::int AS count FROM audit_events WHERE event='sessions_revoked_by_admin' AND actor_id=$1 AND target_id=$2",[alice.id,erin.id])).rows[0].count,1);
+    });
     await t.test('webhook success and failure are recorded without leaking destination secrets',async () => {
       const originalFetch = globalThis.fetch;
       process.env.ALERT_WEBHOOK_URL = 'https://alerts.example.test/receiver';

@@ -259,14 +259,71 @@ async function handle(event, store) {
     }
     if (path.startsWith('/admin/')) {
       requireValue(user.role === 'admin',403,'Administrator access required.');
+      if (path === '/admin/overview' && method === 'GET') {
+        const [people, tickets, activity, waiting, workload] = await Promise.all([
+          db.query(`SELECT count(*)::int AS total, count(*) FILTER (WHERE role='student')::int AS students, count(*) FILTER (WHERE role='staff')::int AS staff,
+            count(*) FILTER (WHERE role='admin')::int AS admins, count(*) FILTER (WHERE blocked)::int AS blocked,
+            count(*) FILTER (WHERE created_at>now()-interval '7 days')::int AS new_this_week,
+            (SELECT count(*)::int FROM sessions WHERE expires_at>now()) AS signed_in FROM users`),
+          db.query(`SELECT count(*) FILTER (WHERE status='open')::int AS open, count(*) FILTER (WHERE status='in_progress')::int AS in_progress,
+            count(*) FILTER (WHERE status='resolved')::int AS resolved, count(*) FILTER (WHERE status<>'resolved' AND assigned_to IS NULL)::int AS unassigned,
+            count(*) FILTER (WHERE status<>'resolved' AND priority='high')::int AS high_priority FROM tickets`),
+          db.query(`SELECT count(*) FILTER (WHERE event='login_failed')::int AS failed_sign_ins,
+            count(*) FILTER (WHERE event IN ('request_forbidden','ticket_access_denied'))::int AS denied_requests,
+            (SELECT count(*)::int FROM security_alerts WHERE created_at>now()-interval '1 day') AS alerts
+            FROM audit_events WHERE created_at>now()-interval '1 day'`),
+          db.query(`SELECT id,title,priority,status,created_at FROM tickets WHERE status<>'resolved' AND assigned_to IS NULL
+            ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,created_at LIMIT 8`),
+          db.query(`SELECT u.id,u.name,u.role,count(t.id)::int AS active_tickets FROM users u
+            LEFT JOIN tickets t ON t.assigned_to=u.id AND t.status<>'resolved'
+            WHERE u.role IN ('staff','admin') AND NOT u.blocked GROUP BY u.id ORDER BY active_tickets DESC,u.name LIMIT 20`)
+        ]);
+        return response(200,{ people: people.rows[0], tickets: tickets.rows[0], lastDay: activity.rows[0], waiting: waiting.rows, workload: workload.rows });
+      }
       if (path === '/admin/users' && method === 'GET') {
-        const { rows } = await db.query('SELECT id,name,email,role,blocked FROM users ORDER BY created_at DESC LIMIT 100');
+        const offset = Number(url.searchParams.get('offset') || 0);
+        requireValue(Number.isInteger(offset) && offset >= 0 && offset <= 10000);
+        const search = text(url.searchParams.get('search') || '',0,100);
+        const role = url.searchParams.get('role') || '';
+        choice(role,['','student','staff','admin','blocked']);
+        const { rows } = await db.query(`SELECT u.id,u.name,u.email,u.role,u.blocked,u.created_at,
+            EXISTS(SELECT 1 FROM sessions s WHERE s.user_id=u.id AND s.expires_at>now()) AS signed_in,
+            (SELECT max(e.created_at) FROM audit_events e WHERE e.actor_id=u.id AND e.event='login_success') AS last_sign_in,
+            (SELECT count(*)::int FROM tickets t WHERE t.owner_id=u.id) AS tickets
+          FROM users u WHERE ($1='' OR ($1='blocked' AND u.blocked) OR u.role=$1)
+          AND ($2='' OR position(lower($2) in lower(u.name))>0 OR position(lower($2) in u.email)>0)
+          ORDER BY u.created_at DESC,u.id LIMIT 26 OFFSET $3`,[role,search,offset]);
+        return response(200,{ users: rows.slice(0,25), hasMore: rows.length > 25 });
+      }
+      if (path === '/admin/assignees' && method === 'GET') {
+        const { rows } = await db.query("SELECT id,name FROM users WHERE role IN ('staff','admin') AND NOT blocked ORDER BY name LIMIT 200");
         return response(200,{ users: rows });
       }
       if (path === '/admin/security' && method === 'GET') {
-        const events = (await db.query('SELECT * FROM audit_events ORDER BY id DESC LIMIT 100')).rows;
-        const alerts = (await db.query('SELECT * FROM security_alerts ORDER BY created_at DESC LIMIT 50')).rows;
-        return response(200,{ events, alerts, alertDeliveryConfigured: Boolean(process.env.ALERT_WEBHOOK_URL) });
+        const offset = Number(url.searchParams.get('offset') || 0);
+        requireValue(Number.isInteger(offset) && offset >= 0 && offset <= 10000);
+        const event = url.searchParams.get('event') || '';
+        requireValue(/^[a-z_]{0,40}$/.test(event));
+        // Targets can be accounts or tickets, so both are looked up and whichever exists is shown.
+        const events = (await db.query(`SELECT e.id,e.event,e.request_id,e.created_at,coalesce(a.email,CASE WHEN e.actor_id IS NOT NULL THEN 'a deleted account' END) AS actor,coalesce(t.email,k.title) AS target
+          FROM audit_events e LEFT JOIN users a ON a.id=e.actor_id LEFT JOIN users t ON t.id=e.target_id LEFT JOIN tickets k ON k.id=e.target_id
+          WHERE ($1='' OR e.event=$1) ORDER BY e.id DESC LIMIT 51 OFFSET $2`,[event,offset])).rows;
+        const eventTypes = (await db.query('SELECT DISTINCT event FROM audit_events ORDER BY event')).rows.map(row => row.event);
+        const alerts = (await db.query('SELECT id,event,status,created_at FROM security_alerts ORDER BY created_at DESC LIMIT 20')).rows;
+        return response(200,{ events: events.slice(0,50), hasMore: events.length > 50, eventTypes, alerts, alertDeliveryConfigured: Boolean(process.env.ALERT_WEBHOOK_URL) });
+      }
+      const signOut = path.match(/^\/admin\/users\/([^/]+)\/sign-out$/);
+      if (signOut && method === 'POST') {
+        fields(input,[]);
+        const id = uuid(signOut[1]);
+        requireValue(id !== user.id,400,'Use Sign out to end your own session.');
+        requireValue(await bump(db, rateKey(secret, `update:${user.id}`), 60) <= 30, 429, 'Update limit reached.');
+        await transaction(db, async client => {
+          requireValue((await client.query('SELECT id FROM users WHERE id=$1',[id])).rowCount === 1,404,'User not found.');
+          await client.query('DELETE FROM sessions WHERE user_id=$1',[id]);
+          await audit(client,'sessions_revoked_by_admin',requestId,user.id,id);
+        });
+        return response(200,{ message: 'The account was signed out everywhere.' });
       }
       const match = path.match(/^\/admin\/users\/([^/]+)$/);
       if (match && method === 'PATCH') {

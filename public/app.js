@@ -1,5 +1,5 @@
 const $ = selector => document.querySelector(selector);
-let currentUser = null, csrfToken = '', registering = false, offset = 0, resetToken = '';
+let currentUser = null, csrfToken = '', registering = false, offset = 0, resetToken = '', userOffset = 0, eventOffset = 0;
 const statusLabel = value => ({ open:'Open', in_progress:'In progress', resolved:'Resolved' })[value] || value;
 function node(tag, className, content) {
   const element = document.createElement(tag);
@@ -9,9 +9,9 @@ function node(tag, className, content) {
 }
 function notice(message, error = false) { $('#notice').textContent = message; $('#notice').className = error ? 'error' : ''; $('#notice').hidden = false; }
 function view(name) {
-  for (const section of ['auth','tickets','detail','users','security','account']) $(`#${section}-view`).hidden = section !== name;
-  $('#breadcrumb').textContent = ({ auth:'Welcome',tickets:'Support tickets',detail:'Request details',users:'People',security:'Security activity',account:'Your account' })[name];
-  for (const item of ['tickets','users','security','account']) $(`#nav-${item}`).classList.toggle('active', item === name || (item === 'tickets' && name === 'detail'));
+  for (const section of ['auth','tickets','detail','overview','users','security','account']) $(`#${section}-view`).hidden = section !== name;
+  $('#breadcrumb').textContent = ({ auth:'Welcome',tickets:'Support tickets',detail:'Request details',overview:'Admin overview',users:'People',security:'Security activity',account:'Your account' })[name];
+  for (const item of ['tickets','overview','users','security','account']) $(`#nav-${item}`).classList.toggle('active', item === name || (item === 'tickets' && name === 'detail'));
 }
 async function api(path, method = 'GET', data) {
   const result = await fetch(`/api${path}`,{ method, credentials:'same-origin', headers:method === 'GET' ? {} : { 'Content-Type':'application/json','X-Campus-Request':'1','X-CSRF-Token':csrfToken }, ...(data === undefined ? {} : { body:JSON.stringify(data) }) });
@@ -25,7 +25,7 @@ async function api(path, method = 'GET', data) {
 function updateAccount() {
   $('#logout').hidden = $('#nav-account').hidden = !currentUser;
   $('#account-label').textContent = currentUser ? `${currentUser.name} · ${currentUser.role}` : 'Campus community';
-  $('#nav-users').hidden = $('#nav-security').hidden = currentUser?.role !== 'admin';
+  $('#nav-overview').hidden = $('#nav-users').hidden = $('#nav-security').hidden = currentUser?.role !== 'admin';
   if (currentUser) $('#welcome-name').textContent = `Hi, ${currentUser.name.split(' ')[0]}.`;
 }
 function action(fn) { return async event => { try { await fn(event); } catch (error) { notice(error.message,true); } }; }
@@ -121,8 +121,8 @@ async function loadTicket(id) {
     const form = node('form','reply-form'); const status = selectField('Status',[['open','Open'],['in_progress','In progress'],['resolved','Resolved']],ticket.status); form.append(status.wrapper);
     let assignee;
     if (currentUser.role === 'admin') {
-      const result = await api('/admin/users');
-      assignee = selectField('Assigned support member',[['','Unassigned'],...result.users.filter(u => ['staff','admin'].includes(u.role) && !u.blocked).map(u => [u.id,u.name])],ticket.assigned_to || ''); form.append(assignee.wrapper);
+      const result = await api('/admin/assignees');
+      assignee = selectField('Assigned support member',[['','Unassigned'],...result.users.map(u => [u.id,u.name])],ticket.assigned_to || ''); form.append(assignee.wrapper);
     }
     const save = node('button','button secondary','Update request'); save.type = 'submit'; form.append(save);
     form.addEventListener('submit',action(async event => { event.preventDefault(); await busy(form,async () => { await api(`/tickets/${id}`,'PATCH',{ status:status.select.value,...(assignee ? { assignedTo:assignee.select.value || null } : {}) }); await loadTicket(id); notice('Request updated.'); }); })); card.append(form);
@@ -141,30 +141,79 @@ async function loadTicket(id) {
   form.addEventListener('submit',action(async event => { event.preventDefault(); await busy(form,async () => { await api(`/tickets/${id}/replies`,'POST',{ body:textarea.value,...(internal?.checked ? { internal:true } : {}) }); await loadTicket(id); }); }));
   card.append(form); detail.append(card); view('detail');
 }
+const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
+const when = value => value ? new Date(value).toLocaleString() : 'Never';
+function stat(label, value, hint) { const tile = node('div','stat'); tile.append(node('span','',label),node('strong','',String(value)),node('p','',hint)); return tile; }
+async function loadOverview() {
+  const { people,tickets,lastDay,waiting,workload } = await api('/admin/overview'), container = $('#overview-content'); container.replaceChildren();
+  const stats = node('div','stat-grid');
+  stats.append(stat('UNRESOLVED REQUESTS',tickets.open + tickets.in_progress,`${tickets.open} open · ${tickets.in_progress} in progress · ${tickets.resolved} resolved`),
+    stat('NEEDS AN OWNER',tickets.unassigned,`${tickets.high_priority} unresolved high priority`),
+    stat('PEOPLE',people.total,`${plural(people.students,'student')} · ${people.staff} staff · ${plural(people.admins,'admin')}`),
+    stat('SIGNED IN NOW',people.signed_in,`${people.new_this_week} joined this week · ${people.blocked} blocked`),
+    stat('FAILED SIGN-INS · 24H',lastDay.failed_sign_ins,`${plural(lastDay.denied_requests,'denied request')} · ${plural(lastDay.alerts,'alert')}`));
+  const columns = node('div','overview-columns'), queue = node('section','panel'), team = node('section','panel');
+  queue.append(node('div','panel-top')); queue.firstChild.append(node('h2','','Waiting for an owner'));
+  if (!waiting.length) queue.append(node('p','empty','Every unresolved request has an owner.'));
+  for (const ticket of waiting) {
+    const row = node('button','ticket-row'); row.type = 'button'; const description = node('span','ticket-description');
+    description.append(node('strong','',ticket.title),node('small','',`${ticket.priority} priority · opened ${new Date(ticket.created_at).toLocaleDateString()}`));
+    row.append(description,node('span',`badge ${ticket.status}`,statusLabel(ticket.status)),node('span','','→'));
+    row.addEventListener('click',action(() => loadTicket(ticket.id))); queue.append(row);
+  }
+  team.append(node('div','panel-top')); team.firstChild.append(node('h2','','Support workload'));
+  if (!workload.length) team.append(node('p','empty','No active staff accounts yet.'));
+  for (const member of workload) { const row = node('div','log-row'); row.append(node('span','',`${member.name} · ${member.role}`),node('strong','',`${member.active_tickets} active`)); team.append(row); }
+  columns.append(queue,team); container.append(stats,columns); view('overview');
+}
+$('#nav-overview').addEventListener('click',action(loadOverview));
+$('#refresh-overview').addEventListener('click',action(loadOverview));
 async function loadUsers() {
-  const { users } = await api('/admin/users'); const container = $('#users-list'); container.replaceChildren();
+  const params = new URLSearchParams(new FormData($('#user-filters'))); params.set('offset',userOffset);
+  const { users,hasMore } = await api(`/admin/users?${params}`); const container = $('#users-list'); container.replaceChildren();
+  if (!users.length) container.append(node('p','empty','No accounts match this view.'));
   for (const user of users) {
     const row = node('form','admin-row'), info = node('div'); info.append(node('strong','',user.name),node('p','',user.email));
+    info.append(node('p','',`${user.signed_in ? 'Signed in now' : 'Signed out'} · last sign-in ${when(user.last_sign_in)} · ${plural(user.tickets,'request')} · joined ${new Date(user.created_at).toLocaleDateString()}`));
     const role = selectField('Role',[['student','Student'],['staff','Staff'],['admin','Admin']],user.role);
     const blockedLabel = node('label','','Blocked'), blocked = node('input'); blocked.type = 'checkbox'; blocked.checked = user.blocked; blockedLabel.append(blocked);
     const save = node('button','button secondary small','Save'); save.type = 'submit'; save.disabled = user.id === currentUser.id; role.select.disabled = blocked.disabled = save.disabled;
-    row.append(info,role.wrapper,blockedLabel,save);
-    row.addEventListener('submit',action(async event => { event.preventDefault(); await busy(row,async () => { await api(`/admin/users/${user.id}`,'PATCH',{ role:role.select.value,blocked:blocked.checked }); notice('Account updated and sessions revoked.'); }); })); container.append(row);
+    const signOut = node('button','button secondary small','Sign out everywhere'); signOut.type = 'button'; signOut.disabled = save.disabled || !user.signed_in;
+    signOut.addEventListener('click',action(async () => { signOut.disabled = true; const result = await api(`/admin/users/${user.id}/sign-out`,'POST',{}); notice(result.message); await loadUsers(); }));
+    row.append(info,role.wrapper,blockedLabel,save,signOut);
+    row.addEventListener('submit',action(async event => { event.preventDefault(); await busy(row,async () => { await api(`/admin/users/${user.id}`,'PATCH',{ role:role.select.value,blocked:blocked.checked }); notice('Account updated and sessions revoked.'); await loadUsers(); }); })); container.append(row);
   }
+  $('#users-previous').disabled = userOffset === 0; $('#users-next').disabled = !hasMore; $('#users-page').textContent = `Page ${userOffset / 25 + 1}`;
   view('users');
 }
-$('#nav-users').addEventListener('click',action(loadUsers));
-$('#nav-security').addEventListener('click',action(async () => {
-  const result = await api('/admin/security'), container = $('#security-content'); container.replaceChildren();
+$('#nav-users').addEventListener('click',action(async () => { userOffset = 0; await loadUsers(); }));
+$('#user-filters').addEventListener('submit',action(async event => { event.preventDefault(); userOffset = 0; await loadUsers(); }));
+$('#users-previous').addEventListener('click',action(async () => { userOffset = Math.max(0,userOffset-25); await loadUsers(); }));
+$('#users-next').addEventListener('click',action(async () => { userOffset += 25; await loadUsers(); }));
+async function loadSecurity() {
+  const params = new URLSearchParams(new FormData($('#event-filters'))); params.set('offset',eventOffset);
+  const result = await api(`/admin/security?${params}`), container = $('#security-content'); container.replaceChildren();
   container.append(node('p','muted',result.alertDeliveryConfigured ? 'An alert delivery destination is configured. Check the states below to verify delivery.' : 'External alert delivery is not configured. Alerts remain visible here.'));
-  for (const [title,items] of [['Alerts',result.alerts],['Recent audit events',result.events]]) {
-    container.append(node('h2','section-title',title)); const panel = node('div','panel');
-    if (!items.length) panel.append(node('p','empty','No recorded events yet.'));
-    for (const item of items) { const row = node('div','log-row'); row.append(node('span','',`${item.event}${item.status ? ` · ${item.status}` : ''}`),node('time','',new Date(item.created_at).toLocaleString())); panel.append(row); }
-    container.append(panel);
+  container.append(node('h2','section-title','Alerts')); const panel = node('div','panel');
+  if (!result.alerts.length) panel.append(node('p','empty','No alerts raised yet.'));
+  for (const item of result.alerts) { const row = node('div','log-row'); row.append(node('span','',`${item.event} · ${item.status}`),node('time','',when(item.created_at))); panel.append(row); }
+  container.append(panel);
+  const select = $('#event-type'), chosen = select.value; select.replaceChildren(node('option','','All events')); select.firstChild.value = '';
+  for (const type of result.eventTypes) { const option = node('option','',type); option.value = type; option.selected = type === chosen; select.append(option); }
+  const list = $('#event-list'); list.replaceChildren();
+  if (!result.events.length) list.append(node('p','empty','No recorded events match this view.'));
+  for (const item of result.events) {
+    const row = node('div','log-row'), detail = node('span'); detail.append(node('strong','',item.event));
+    detail.append(node('small','',`${item.actor ? `by ${item.actor}` : 'anonymous'}${item.target ? ` · on ${item.target}` : ''} · request ${item.request_id}`));
+    row.append(detail,node('time','',when(item.created_at))); list.append(row);
   }
+  $('#events-previous').disabled = eventOffset === 0; $('#events-next').disabled = !result.hasMore; $('#events-page').textContent = `Page ${eventOffset / 50 + 1}`;
   view('security');
-}));
+}
+$('#nav-security').addEventListener('click',action(async () => { eventOffset = 0; await loadSecurity(); }));
+$('#event-filters').addEventListener('submit',action(async event => { event.preventDefault(); eventOffset = 0; await loadSecurity(); }));
+$('#events-previous').addEventListener('click',action(async () => { eventOffset = Math.max(0,eventOffset-50); await loadSecurity(); }));
+$('#events-next').addEventListener('click',action(async () => { eventOffset += 50; await loadSecurity(); }));
 $('#nav-account').addEventListener('click',action(async () => {
   const { user,sessionExpiresAt } = await api('/auth/me'), details = $('#account-details'); details.replaceChildren();
   for (const [term,value] of [['Name',user.name],['Email',user.email],['Role',user.role],['Session expires',new Date(sessionExpiresAt).toLocaleString()]]) details.append(node('dt','',term),node('dd','',value));
