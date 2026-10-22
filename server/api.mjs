@@ -149,20 +149,25 @@ async function handle(event, store) {
         await audit(db, 'ticket_access_denied', requestId, user.id, id);
         throw new HttpError(404, 'Ticket not found.');
       }
+      // Internal notes are for support staff only, never for the requester, even when the requester is staff.
+      const staffView = ['staff','admin'].includes(user.role) && ticket.owner_id !== user.id;
       if (method === 'GET' && !ticketMatch[2]) {
-        const { rows } = await db.query('SELECT r.id,r.body,r.created_at,u.name AS author FROM replies r JOIN users u ON u.id=r.author_id WHERE ticket_id=$1 ORDER BY r.created_at DESC LIMIT 100', [id]);
-        return response(200, { ticket, replies: rows.reverse() });
+        const { rows } = await db.query('SELECT r.id,r.body,r.internal,r.created_at,u.name AS author FROM replies r JOIN users u ON u.id=r.author_id WHERE ticket_id=$1 AND ($2 OR NOT r.internal) ORDER BY r.created_at DESC LIMIT 100', [id,staffView]);
+        return response(200, { ticket, replies: rows.reverse(), canAddInternalNotes: staffView });
       }
       if (method === 'POST' && ticketMatch[2]) {
-        fields(input,['body']);
+        fields(input, staffView ? ['body','internal'] : ['body']);
         const body = text(input.body,1,2000);
+        requireValue(input.internal === undefined || typeof input.internal === 'boolean');
+        const internal = input.internal === true;
         requireValue(await bump(db, rateKey(secret, `reply:${user.id}`), 3600) <= 60, 429, 'Reply limit reached.');
         await transaction(db, async client => {
-          await client.query('INSERT INTO replies(id,ticket_id,author_id,body) VALUES($1,$2,$3,$4)', [randomUUID(),id,user.id,body]);
-          await client.query('UPDATE tickets SET updated_at=now() WHERE id=$1', [id]);
-          await audit(client, 'ticket_replied',requestId,user.id,id);
+          await client.query('INSERT INTO replies(id,ticket_id,author_id,body,internal) VALUES($1,$2,$3,$4,$5)', [randomUUID(),id,user.id,body,internal]);
+          // Leave updated_at alone for internal notes so the requester's list does not reveal hidden activity.
+          if (!internal) await client.query('UPDATE tickets SET updated_at=now() WHERE id=$1', [id]);
+          await audit(client, internal ? 'ticket_internal_note' : 'ticket_replied',requestId,user.id,id);
         });
-        return response(201, { message: 'Reply added.' });
+        return response(201, { message: internal ? 'Internal note added.' : 'Reply added.' });
       }
       if (method === 'PATCH' && !ticketMatch[2]) {
         requireValue(['staff','admin'].includes(user.role),403,'Staff access required.');

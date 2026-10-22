@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { createTestHandler } from '../server/api.mjs';
 process.env.APP_ORIGIN = 'http://localhost:8888';
@@ -11,7 +11,8 @@ delete process.env.ALERT_WEBHOOK_URL;
 
 test('API security boundaries against an embedded PostgreSQL engine', async t => {
   const engine = new PGlite();
-  await engine.exec(await readFile(new URL('../db/001-initial.sql',import.meta.url),'utf8'));
+  const migrations = new URL('../db/',import.meta.url);
+  for (const file of (await readdir(migrations)).filter(name => name.endsWith('.sql')).sort()) await engine.exec(await readFile(new URL(file,migrations),'utf8'));
   const db = { query: async (...args) => { const result = await engine.query(...args); return { ...result,rowCount:result.rows.length || result.affectedRows || 0 }; } };
   db.connect = async () => ({ ...db,release() {} });
   const handler = createTestHandler(db);
@@ -61,6 +62,23 @@ test('API security boundaries against an embedded PostgreSQL engine', async t =>
       await db.query('UPDATE tickets SET assigned_to=$1 WHERE id=$2',[bob.id,ticket.id]);
       assert.equal((await call(`/tickets/${ticket.id}/replies`,'POST',{ body:'We are looking into this.' },bob)).statusCode,201);
       assert.equal((await call(`/tickets/${ticket.id}`,'PATCH',{ status:'in_progress' },bob)).statusCode,200);
+    });
+    await t.test('internal staff notes are hidden from the requester',async () => {
+      await db.query('DELETE FROM rate_limits');
+      const before = (await call('/tickets','GET',undefined,alice)).json.tickets.find(item => item.id === ticket.id).updated_at;
+      assert.equal((await call(`/tickets/${ticket.id}/replies`,'POST',{ body:'Requester tries a hidden note.',internal:true },alice)).statusCode,400);
+      assert.equal((await call(`/tickets/${ticket.id}/replies`,'POST',{ body:'Not a boolean.',internal:'yes' },bob)).statusCode,400);
+      assert.equal((await call(`/tickets/${ticket.id}/replies`,'POST',{ body:'Staff-only: likely a router fault.',internal:true },bob)).statusCode,201);
+      const staffRead = await call(`/tickets/${ticket.id}`,'GET',undefined,bob);
+      assert.equal(staffRead.json.canAddInternalNotes,true);
+      assert.ok(staffRead.json.replies.some(reply => reply.internal && reply.body === 'Staff-only: likely a router fault.'));
+      const ownerRead = await call(`/tickets/${ticket.id}`,'GET',undefined,alice);
+      assert.equal(ownerRead.json.canAddInternalNotes,false);
+      assert.ok(!ownerRead.body.includes('router fault')); assert.ok(ownerRead.json.replies.every(reply => !reply.internal));
+      assert.equal((await call('/tickets','GET',undefined,alice)).json.tickets.find(item => item.id === ticket.id).updated_at,before);
+      assert.equal((await db.query("SELECT count(*)::int AS count FROM audit_events WHERE event='ticket_internal_note' AND target_id=$1",[ticket.id])).rows[0].count,1);
+      const own = (await call('/tickets','POST',{ title:'Staff member request',body:'A staff member needs help too.',category:'Other',priority:'low' },bob)).json.ticket;
+      assert.equal((await call(`/tickets/${own.id}/replies`,'POST',{ body:'Hidden from myself?',internal:true },bob)).statusCode,400);
     });
     await t.test('expired and blocked sessions are rejected',async () => {
       await db.query("UPDATE sessions SET expires_at=now()-interval '1 minute' WHERE user_id=$1",[bob.id]);

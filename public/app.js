@@ -93,7 +93,7 @@ function selectField(label, values, selected) {
   wrapper.append(select); return { wrapper,select };
 }
 async function loadTicket(id) {
-  const { ticket,replies } = await api(`/tickets/${id}`);
+  const { ticket,replies,canAddInternalNotes } = await api(`/tickets/${id}`);
   const detail = $('#detail'); detail.replaceChildren();
   const card = node('article','panel detail-card');
   card.append(node('span',`badge ${ticket.status}`,statusLabel(ticket.status)),node('p','detail-meta',`${ticket.category} · ${ticket.priority} priority · ${new Date(ticket.created_at).toLocaleString()}`),node('h1','',ticket.title),node('p','detail-body',ticket.body));
@@ -109,10 +109,16 @@ async function loadTicket(id) {
   }
   card.append(node('h2','section-title','Conversation'));
   if (!replies.length) card.append(node('p','muted','No replies yet. Updates will appear here.'));
-  for (const reply of replies) { const item = node('article','reply'); item.append(node('strong','',reply.author),node('small','',new Date(reply.created_at).toLocaleString()),node('p','reply-text',reply.body)); card.append(item); }
+  for (const reply of replies) { const item = node('article',reply.internal ? 'reply internal' : 'reply'); item.append(node('strong','',reply.author),node('small','',new Date(reply.created_at).toLocaleString())); if (reply.internal) item.append(node('span','badge internal','Internal note')); item.append(node('p','reply-text',reply.body)); card.append(item); }
   const form = node('form','reply-form'), label = node('label','','Add a reply'), textarea = node('textarea'); textarea.required = true; textarea.maxLength = 2000; textarea.rows = 4; label.append(textarea);
-  const send = node('button','button primary','Send reply →'); send.type = 'submit'; form.append(label,send);
-  form.addEventListener('submit',action(async event => { event.preventDefault(); await busy(form,async () => { await api(`/tickets/${id}/replies`,'POST',{ body:textarea.value }); await loadTicket(id); }); }));
+  const send = node('button','button primary','Send reply →'); send.type = 'submit'; form.append(label);
+  let internal;
+  if (canAddInternalNotes) {
+    const internalLabel = node('label','internal-toggle','Internal note — hidden from the requester'); internal = node('input'); internal.type = 'checkbox'; internalLabel.prepend(internal); form.append(internalLabel);
+    internal.addEventListener('change',() => { send.textContent = internal.checked ? 'Add internal note →' : 'Send reply →'; });
+  }
+  form.append(send);
+  form.addEventListener('submit',action(async event => { event.preventDefault(); await busy(form,async () => { await api(`/tickets/${id}/replies`,'POST',{ body:textarea.value,...(internal?.checked ? { internal:true } : {}) }); await loadTicket(id); }); }));
   card.append(form); detail.append(card); view('detail');
 }
 async function loadUsers() {
