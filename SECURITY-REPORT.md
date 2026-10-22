@@ -1,6 +1,4 @@
-# Campus Helpdesk — Project Overview and Security Design
-
-**Web Security Lab · 22 October 2026**
+# Campus Helpdesk - Project Overview and Security Design
 
 Muaz Ahmed (if24b241) · Mohamed Amin Kasmi (if24b120) · Mahmoud Hashkeil (if25b198) · Mateo Lamthi (if23b263)
 
@@ -18,7 +16,7 @@ Each ticket can carry up to five attachments. Students and staff can upload scre
 
 The frontend is plain HTML, CSS and JavaScript with no framework and no third-party scripts. Netlify serves the static files and runs the Node.js API as a serverless function. PostgreSQL, hosted on Neon, stores users, tickets, replies, attachments, sessions, password-reset tokens, rate-limit counters and audit events.
 
-The browser only ever talks to the API over HTTPS. It never receives database credentials and never connects to PostgreSQL directly. Every request is treated as untrusted and validated on the server before any business rule runs. Because functions are stateless and instances come and go, all shared state — sessions, rate counters, audit records — lives in the database. Versioned SQL migrations define the schema and are applied with a separate migration connection, so the runtime connection can be restricted to ordinary read and write privileges instead of schema changes.
+The browser only ever talks to the API over HTTPS. It never receives database credentials and never connects to PostgreSQL directly. Every request is treated as untrusted and validated on the server before any business rule runs. Because functions are stateless and instances come and go, all shared state - sessions, rate counters, audit records - lives in the database. Versioned SQL migrations define the schema and are applied with a separate migration connection, so the runtime connection can be restricted to ordinary read and write privileges instead of schema changes.
 
 ## Accounts and sessions
 
@@ -34,7 +32,7 @@ A successful login creates a random 256-bit session token, but only its SHA-256 
 
 **Cross-site request forgery (CWE-352).** Any request that changes state must come from the configured origin, must include an application-specific request header, and must use JSON. Authenticated writes also require a random CSRF token bound to the session, checked on the server. `SameSite=Strict` cookies add another layer. Login, registration and password recovery apply the origin and format checks even though no session exists yet.
 
-**Access control (CWE-862, CWE-639).** Ticket reads, replies, attachment listing and downloads all check ownership or staff assignment on the server. Changing a ticket ID in the URL returns 404 rather than someone else's data, and each attempt is written to the audit log. Every admin route re-checks the administrator role before running a query. Registration accepts only the expected fields, so adding a `role` field to the request body is rejected as an unexpected field — we confirmed this against the deployed application, which returned HTTP 400. Internal notes are filtered inside the SQL query before the data ever reaches the browser.
+**Access control (CWE-862, CWE-639).** Ticket reads, replies, attachment listing and downloads all check ownership or staff assignment on the server. Changing a ticket ID in the URL returns 404 rather than someone else's data, and each attempt is written to the audit log. Every admin route re-checks the administrator role before running a query. Registration accepts only the expected fields, so adding a `role` field to the request body is rejected as an unexpected field - we confirmed this against the deployed application, which returned HTTP 400. Internal notes are filtered inside the SQL query before the data ever reaches the browser.
 
 **Allowlists and blocking.** Rather than trying to detect malicious-looking input, the API declares what is allowed: HTTP methods, request fields, categories, priorities, statuses, roles, UUID formats and text lengths. Anything else is rejected. Account blocking is the explicit deny mechanism and revokes sessions immediately. We deliberately avoided blacklisting SQL keywords and HTML strings, because blocklists are easy to bypass and tend to reject legitimate support text.
 
@@ -58,9 +56,9 @@ The fifth failed login from a source within a 15-minute window raises a security
 
 ## Verification
 
-The application is checked by a GitHub Actions workflow on every push and pull request: the JavaScript syntax check, the unit tests, the API integration suite and a production-dependency audit. The unit tests cover password hashing, input validation, ticket permissions and cookie construction. The integration suite runs the real API against an embedded PostgreSQL engine in isolation and covers SQL and HTML payloads, cross-account isolation, CSRF and origin rejection, role and mass-assignment rejection, internal-note privacy, session rotation and revocation, the login cooldown, password change and reset flows, rate limits, body limits, and the full attachment pipeline — allowed types, magic-byte mismatch, ownership denial and the download round-trip. At the time of writing, four unit tests and nineteen integration checks pass, and `npm audit` reports no production vulnerabilities.
+The application is checked by a GitHub Actions workflow on every push and pull request: the JavaScript syntax check, the unit tests, the API integration suite and a production-dependency audit. The unit tests cover password hashing, input validation, ticket permissions and cookie construction. The integration suite runs the real API against an embedded PostgreSQL engine in isolation and covers SQL and HTML payloads, cross-account isolation, CSRF and origin rejection, role and mass-assignment rejection, internal-note privacy, session rotation and revocation, the login cooldown, password change and reset flows, rate limits, body limits, and the full attachment pipeline - allowed types, magic-byte mismatch, ownership denial and the download round-trip. At the time of writing, four unit tests and nineteen integration checks pass, and `npm audit` reports no production vulnerabilities.
 
-We also tested the deployed build directly. Unauthenticated calls to `/api/auth/me` return 401, a registration request from a foreign origin returns 403, a registration body containing `role: "admin"` returns 400, admin endpoints without a session return 401, and a forged 64-character session cookie returns 401. These results match what the code review predicts, though they are point checks rather than a full penetration test — that is the purpose of the partner exercise.
+We also tested the deployed build directly. Unauthenticated calls to `/api/auth/me` return 401, a registration request from a foreign origin returns 403, a registration body containing `role: "admin"` returns 400, admin endpoints without a session return 401, and a forged 64-character session cookie returns 401. These results match what the code review predicts, though they are point checks rather than a full penetration test - that is the purpose of the partner exercise.
 
 ## Scope and further work
 
