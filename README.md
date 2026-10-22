@@ -1,38 +1,92 @@
 # Campus Helpdesk
 
-A campus support application built for a Web Security Lab assessment. Students submit private requests, assigned staff respond, and administrators manage access and review security activity.
+We built Campus Helpdesk for our Web Security Lab project. The idea is to give students a simple way to ask for campus support while applying the security concepts covered in the lab.
 
-**Deployment:** Hosted on Netlify at **https://campushelpdeskteam.netlify.app/**. Production branch: `feat/secure-campus-helpdesk`. See `docs/DEPLOYMENT-VERIFICATION.md` for the latest verified readiness status.
+Students can create private tickets, follow their progress and reply to the support team. Staff handle assigned requests, and administrators manage users, assignments and security activity.
 
-## Team
+**Live app:** [campushelpdeskteam.netlify.app](https://campushelpdeskteam.netlify.app/)
+
+
+## Our team
 
 | Name | Student ID |
 | --- | --- |
 | Muaz Ahmed | if24b241 |
 | Mohamed Amin Kasmi | if24b120 |
 | Mahmoud Hashkeil | if25b198 |
-| Mateo Lamthi | if23b263
+| Mateo Lamthi | if23b263 |
 
-## Stack
+## What the app does
 
-- HTML, CSS, and vanilla JavaScript frontend; no CDN scripts or remote fonts.
-- Node.js 24 / JavaScript API deployed as Netlify Functions.
-- PostgreSQL for accounts, sessions, tickets, audit events, and shared rate limits.
-- Node's built-in test runner and PGlite for API tests against an embedded PostgreSQL engine.
+- Students can register, sign in, create tickets and view their own conversations.
+- Staff can view their own or assigned tickets, reply and update ticket status.
+- Support staff can add internal notes that are hidden from the requester, including when the requester is a staff member.
+- Administrators can assign tickets, search users, change roles, block accounts and sign other users out remotely.
+- The admin dashboard shows ticket workload, unassigned requests and recent security activity.
+- Users can change their password or request a password reset. Sending reset emails requires a configured delivery webhook.
 
-## Local setup
+## Technologies
 
-Requirements: Node.js 24 and PostgreSQL 17 (or Docker Desktop).
+We use HTML, CSS and vanilla JavaScript for the frontend, with a Node.js API running through Netlify Functions. PostgreSQL stores accounts, tickets, replies, sessions and security records. The browser sends requests to the API rather than connecting directly to the database.
+
+The tests use Node's built-in test runner and PGlite, an embedded PostgreSQL engine. No frontend framework or external script CDN is required.
+
+## Security controls
+
+Security checks run on the server, even when the interface also validates input.
+
+| Area | What we implemented |
+| --- | --- |
+| SQL injection | Parameterized PostgreSQL queries keep user input separate from SQL commands. |
+| XSS | User content is displayed as plain text through `textContent`. A restrictive Content Security Policy adds another layer of protection. |
+| CSRF | State-changing requests require the configured origin, a custom request header and JSON. Authenticated changes also require a session-bound CSRF token. |
+| Passwords | Passwords are salted and hashed with scrypt. The password policy requires 15–128 characters. |
+| Sessions and cookies | Random session tokens are stored as hashes in the database. Production cookies use `Secure`, `HttpOnly`, `SameSite=Strict` and the `__Host-` prefix. Sessions expire after eight hours. |
+| Access control | The API checks ticket ownership, staff assignment and administrator permissions. Changing a ticket ID does not grant access to another student's ticket. |
+| Allowlists and blocking | Only expected fields, roles, categories and status values are accepted. Administrators can block accounts and revoke their sessions. |
+| Abuse prevention | Shared database counters limit requests, sign-in attempts and ticket activity. Body-size limits, pagination and query timeouts reduce resource use. |
+| Logging and alerts | Audit records track important actions and failures. Repeated failed logins create an alert; an optional HTTPS webhook can deliver it externally. |
+| Password recovery | Reset tokens are hashed, expire after 30 minutes and work once. A completed reset invalidates existing sessions. |
+
+We do not rely on a blacklist of SQL keywords or HTML tags. Parameterized queries, safe rendering and explicit validation handle those inputs without treating legitimate support text as executable code.
+
+Application rate limits help with abuse and resource exhaustion, but they do not guarantee protection against DDoS attacks. Hosting-level protection and monitoring are still needed. This project also does not claim to prevent every known CWE.
+
+## Run locally
+
+You need Node.js 24 and PostgreSQL. The included Docker Compose file runs PostgreSQL 17 locally if you have Docker Desktop.
+
+### 1. Install dependencies
 
 ```sh
 npm ci
+```
+
+### 2. Configure the environment
+
+Copy `.env.example` to `.env`:
+
+```sh
 cp .env.example .env
+```
+
+On Windows PowerShell, use:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Generate a random value for `RATE_LIMIT_SECRET`:
+
+```sh
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-On PowerShell, use `Copy-Item .env.example .env`. Paste the generated random value into `RATE_LIMIT_SECRET` in `.env`. Never commit `.env`.
+Paste that value into `.env`. The example database URL matches the local Docker configuration, and `APP_ORIGIN` should remain `http://localhost:8888` for local development. Never commit `.env` or database credentials.
 
-Start Docker Desktop, then:
+### 3. Start the database and app
+
+With Docker Desktop running:
 
 ```sh
 docker compose up -d
@@ -40,23 +94,15 @@ npm run migrate
 npm run dev
 ```
 
-Open **http://localhost:8888**. Register an account. To make it the initial administrator:
+If you already have PostgreSQL, set `DATABASE_URL` to that database and skip the Docker command. The migration command applies the SQL files in `db/`.
+
+Open [localhost:8888](http://localhost:8888). Register an account, then make it the first administrator using:
 
 ```sh
 npm run admin -- your-email@example.com
 ```
 
-Sign in again. **Admin overview** shows open and unassigned requests, staff workload and the last day's failed sign-ins. Register separate student and staff accounts, promote the support account through **People** (searchable, filterable by role, with remote sign-out), and assign tickets through their details pages. **Security activity** lists alerts and a filterable audit log. Staff only see their own or assigned tickets; administrators see all tickets.
+Sign in again to access the admin features. Other users register as students; an administrator can assign staff roles through **People**. There are no preset admin credentials.
 
-The compose database password is for local development only. The local HTTP cookie intentionally omits `Secure`; production requires HTTPS and uses a `__Host-` cookie. This app is not a browser-only demo: sign-in and tickets require a working database and valid environment configuration.
+The Docker password is only for local development. Local HTTP uses a development cookie without `Secure`; the deployed app requires HTTPS and uses the production cookie settings.
 
-## Verification
-
-```sh
-npm run check
-npm test
-npm run test:integration
-npm audit --omit=dev --audit-level=high
-```
-
-Integration tests run in an isolated, in-memory PostgreSQL engine and do not use your live database. They cover SQL payload storage, ownership checks, assigned staff, CSRF, content types, privilege fields, session rotation/logout/expiry, blocked accounts, login alerts, rate limiting, and database failures. These are regression tests, not a penetration-test certification or proof of DDoS resistance.
