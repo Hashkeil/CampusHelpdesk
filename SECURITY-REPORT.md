@@ -60,8 +60,4 @@ The application is checked by a GitHub Actions workflow on every push and pull r
 
 We also tested the deployed build directly. Unauthenticated calls to `/api/auth/me` return 401, a registration request from a foreign origin returns 403, a registration body containing `role: "admin"` returns 400, admin endpoints without a session return 401, and a forged 64-character session cookie returns 401. These results match what the code review predicts, though they are point checks rather than a full penetration test - that is the purpose of the partner exercise.
 
-## Scope and further work
-
-This design closes the weaknesses we set out to cover, but it is not a claim of immunity. Email verification, multi-factor authentication, durable notification delivery and enforced audit-log retention are outside the current scope. Runtime database privileges, TLS configuration, secret handling and hosting quotas need operational review, and permission changes can briefly overlap requests that were already authorized, so concurrency deserves more testing before sensitive real-world use. We would also revisit the deliberate per-email login cooldown, which protects against guessing but can temporarily lock out a legitimate user targeted by an attacker.
-
 **Repository:** <https://github.com/Hashkeil/CampusHelpdesk> · **Implementation:** `server/api.mjs`, `server/security.mjs`, `server/db.mjs`, `public/app.js`, `netlify.toml`, `db/*.sql`, `tests/`
