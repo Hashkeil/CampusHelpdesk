@@ -2,7 +2,7 @@
 
 A campus support application built for a Web Security Lab assessment. Students submit private requests, assigned staff respond, and administrators manage access and review security activity.
 
-**Deployment:** This application is intended to be deployed on Netlify. Live URL: **[add your Netlify URL after deployment]**. No production deployment has been verified yet.
+**Deployment:** Hosted on Netlify at **https://campushelpdeskteam.netlify.app/**. Production branch: `feat/secure-campus-helpdesk`. See `docs/DEPLOYMENT-VERIFICATION.md` for the latest verified readiness status.
 
 ## Team
 

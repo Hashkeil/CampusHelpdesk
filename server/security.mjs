@@ -61,5 +61,6 @@ export const headers = {
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'no-referrer',
   'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
-  'X-Frame-Options': 'DENY'
+  'X-Frame-Options': 'DENY',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
 };
