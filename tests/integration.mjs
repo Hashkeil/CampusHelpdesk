@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { PGlite } from '@electric-sql/pglite';
 import { createTestHandler } from '../server/api.mjs';
 process.env.APP_ORIGIN = 'http://localhost:8888';
@@ -8,10 +8,12 @@ process.env.RATE_LIMIT_SECRET = 'integration-only-secret-with-at-least-32-charac
 process.env.NODE_ENV = 'test';
 delete process.env.NETLIFY;
 delete process.env.ALERT_WEBHOOK_URL;
+delete process.env.PASSWORD_RESET_WEBHOOK_URL;
 
 test('API security boundaries against an embedded PostgreSQL engine', async t => {
   const engine = new PGlite();
-  await engine.exec(await readFile(new URL('../db/001-initial.sql',import.meta.url),'utf8'));
+  const migrations = new URL('../db/',import.meta.url);
+  for (const file of (await readdir(migrations)).filter(name => name.endsWith('.sql')).sort()) await engine.exec(await readFile(new URL(file,migrations),'utf8'));
   const db = { query: async (...args) => { const result = await engine.query(...args); return { ...result,rowCount:result.rows.length || result.affectedRows || 0 }; } };
   db.connect = async () => ({ ...db,release() {} });
   const handler = createTestHandler(db);
@@ -62,6 +64,89 @@ test('API security boundaries against an embedded PostgreSQL engine', async t =>
       assert.equal((await call(`/tickets/${ticket.id}/replies`,'POST',{ body:'We are looking into this.' },bob)).statusCode,201);
       assert.equal((await call(`/tickets/${ticket.id}`,'PATCH',{ status:'in_progress' },bob)).statusCode,200);
     });
+    await t.test('internal staff notes are hidden from the requester',async () => {
+      await db.query('DELETE FROM rate_limits');
+      const before = (await call('/tickets','GET',undefined,alice)).json.tickets.find(item => item.id === ticket.id).updated_at;
+      assert.equal((await call(`/tickets/${ticket.id}/replies`,'POST',{ body:'Requester tries a hidden note.',internal:true },alice)).statusCode,400);
+      assert.equal((await call(`/tickets/${ticket.id}/replies`,'POST',{ body:'Not a boolean.',internal:'yes' },bob)).statusCode,400);
+      assert.equal((await call(`/tickets/${ticket.id}/replies`,'POST',{ body:'Staff-only: likely a router fault.',internal:true },bob)).statusCode,201);
+      const staffRead = await call(`/tickets/${ticket.id}`,'GET',undefined,bob);
+      assert.equal(staffRead.json.canAddInternalNotes,true);
+      assert.ok(staffRead.json.replies.some(reply => reply.internal && reply.body === 'Staff-only: likely a router fault.'));
+      const ownerRead = await call(`/tickets/${ticket.id}`,'GET',undefined,alice);
+      assert.equal(ownerRead.json.canAddInternalNotes,false);
+      assert.ok(!ownerRead.body.includes('router fault')); assert.ok(ownerRead.json.replies.every(reply => !reply.internal));
+      assert.equal((await call('/tickets','GET',undefined,alice)).json.tickets.find(item => item.id === ticket.id).updated_at,before);
+      assert.equal((await db.query("SELECT count(*)::int AS count FROM audit_events WHERE event='ticket_internal_note' AND target_id=$1",[ticket.id])).rows[0].count,1);
+      const own = (await call('/tickets','POST',{ title:'Staff member request',body:'A staff member needs help too.',category:'Other',priority:'low' },bob)).json.ticket;
+      assert.equal((await call(`/tickets/${own.id}/replies`,'POST',{ body:'Hidden from myself?',internal:true },bob)).statusCode,400);
+    });
+    await t.test('password changes require the current password and revoke old sessions',async () => {
+      await db.query('DELETE FROM rate_limits');
+      await register('carol@example.com'); const carol = await login('carol@example.com');
+      const newPass = 'a brand new campus passphrase';
+      assert.ok(Date.parse((await call('/auth/me','GET',undefined,carol)).json.sessionExpiresAt) > Date.now());
+      assert.equal((await call('/auth/password','POST',{ currentPassword:pass,newPassword:newPass,role:'admin' },carol)).statusCode,400);
+      assert.equal((await call('/auth/password','POST',{ currentPassword:pass,newPassword:'too short' },carol)).statusCode,400);
+      assert.equal((await call('/auth/password','POST',{ currentPassword:pass,newPassword:pass },carol)).statusCode,400);
+      const wrong = await call('/auth/password','POST',{ currentPassword:'not the right password at all',newPassword:newPass },carol);
+      assert.equal(wrong.statusCode,400); assert.equal((await call('/auth/me','GET',undefined,carol)).statusCode,200);
+      const changed = await call('/auth/password','POST',{ currentPassword:pass,newPassword:newPass },carol);
+      assert.equal(changed.statusCode,200);
+      const rotated = { cookie:changed.headers['Set-Cookie'].split(';')[0],csrf:changed.json.csrfToken };
+      assert.notEqual(rotated.cookie,carol.cookie);
+      assert.equal((await call('/auth/me','GET',undefined,carol)).statusCode,401);
+      assert.equal((await call('/auth/me','GET',undefined,rotated)).statusCode,200);
+      assert.equal((await call('/auth/logout','POST',{},{ cookie:rotated.cookie,csrf:carol.csrf })).statusCode,403);
+      assert.equal((await call('/auth/login','POST',{ email:'carol@example.com',password:pass })).statusCode,401);
+      const events = (await db.query("SELECT event FROM audit_events WHERE actor_id=$1 AND event LIKE 'password%' ORDER BY id",[carol.id])).rows.map(row => row.event);
+      assert.deepEqual(events,['password_change_failed','password_changed']);
+      assert.ok(!JSON.stringify((await db.query('SELECT * FROM audit_events')).rows).includes(newPass));
+      const fresh = (await call('/auth/login','POST',{ email:'carol@example.com',password:newPass }));
+      assert.equal(fresh.statusCode,200);
+      const session = { cookie:fresh.headers['Set-Cookie'].split(';')[0],csrf:fresh.json.csrfToken };
+      let limited;
+      for (let i=0;i<4;i++) limited = await call('/auth/password','POST',{ currentPassword:'guessing the password again',newPassword:'another long passphrase here' },session);
+      assert.equal(limited.statusCode,429);
+    });
+    await t.test('password reset links are single-use, expire and revoke sessions',async () => {
+      await db.query('DELETE FROM rate_limits');
+      await register('dave@example.com'); const dave = await login('dave@example.com');
+      const originalFetch = globalThis.fetch, sent = [];
+      process.env.PASSWORD_RESET_WEBHOOK_URL = 'https://mail.example.test/reset';
+      globalThis.fetch = async (_url,options) => { assert.equal(options.redirect,'error'); sent.push(JSON.parse(options.body)); return { ok:true }; };
+      const forgot = async address => call('/auth/forgot','POST',{ email:address });
+      const linkToken = () => { const match = sent.at(-1).link.match(/^http:\/\/localhost:8888\/#reset=([0-9a-f]{64})$/); assert.ok(match); return match[1]; };
+      try {
+        const missing = await forgot('nobody@example.com');
+        assert.equal(missing.statusCode,202); assert.equal(sent.length,0);
+        const requested = await forgot('dave@example.com');
+        assert.equal(requested.statusCode,202); assert.equal(requested.json.message,missing.json.message);
+        assert.equal(sent.length,1); assert.equal(sent[0].email,'dave@example.com');
+        const first = linkToken();
+        assert.equal((await db.query('SELECT count(*)::int AS count FROM password_resets WHERE token_hash=$1',[first])).rows[0].count,0);
+        await forgot('dave@example.com'); const second = linkToken();
+        const newPass = 'dave recovered his campus passphrase';
+        assert.equal((await call('/auth/reset','POST',{ token:first,password:newPass })).statusCode,400);
+        assert.equal((await call('/auth/reset','POST',{ token:'not-a-token',password:newPass })).statusCode,400);
+        assert.equal((await call('/auth/reset','POST',{ token:second,password:'short' })).statusCode,400);
+        assert.equal((await call('/auth/reset','POST',{ token:second,password:newPass,email:'dave@example.com' })).statusCode,400);
+        assert.equal((await call('/auth/reset','POST',{ token:second,password:newPass })).statusCode,200);
+        assert.equal((await call('/auth/me','GET',undefined,dave)).statusCode,401);
+        assert.equal((await call('/auth/reset','POST',{ token:second,password:'an attacker replaying the link' })).statusCode,400);
+        assert.equal((await call('/auth/login','POST',{ email:'dave@example.com',password:pass })).statusCode,401);
+        assert.equal((await call('/auth/login','POST',{ email:'dave@example.com',password:newPass })).statusCode,200);
+        await forgot('dave@example.com'); const expired = linkToken();
+        await db.query("UPDATE password_resets SET expires_at=now()-interval '1 minute'");
+        assert.equal((await call('/auth/reset','POST',{ token:expired,password:'too late for this reset link' })).statusCode,400);
+        const limited = await forgot('dave@example.com');
+        assert.equal(limited.statusCode,202); assert.equal(sent.length,3);
+        const events = (await db.query("SELECT event FROM audit_events WHERE event LIKE 'password_reset%'")).rows.map(row => row.event);
+        assert.deepEqual(events.sort(),['password_reset_completed','password_reset_requested','password_reset_requested','password_reset_requested']);
+        const logs = JSON.stringify((await db.query('SELECT * FROM audit_events')).rows);
+        assert.ok(!logs.includes(second)); assert.ok(!logs.includes('dave@example.com'));
+      } finally { globalThis.fetch = originalFetch; delete process.env.PASSWORD_RESET_WEBHOOK_URL; }
+    });
     await t.test('expired and blocked sessions are rejected',async () => {
       await db.query("UPDATE sessions SET expires_at=now()-interval '1 minute' WHERE user_id=$1",[bob.id]);
       assert.equal((await call('/auth/me','GET',undefined,bob)).statusCode,401);
@@ -92,6 +177,36 @@ test('API security boundaries against an embedded PostgreSQL engine', async t =>
       assert.equal((await db.query('SELECT blocked FROM users WHERE id=$1',[bob.id])).rows[0].blocked,true);
       assert.equal((await db.query('SELECT * FROM sessions WHERE user_id=$1',[bob.id])).rows.length,0);
       assert.equal((await call(`/admin/users/${alice.id}`,'PATCH',{ role:'student',blocked:false },alice)).statusCode,400);
+    });
+    await t.test('admin overview, people search, audit log and remote sign-out are admin-only',async () => {
+      await db.query('DELETE FROM rate_limits');
+      await register('erin@example.com'); const erin = await login('erin@example.com');
+      const created = await call('/tickets','POST',{ title:'Projector broken',body:'The projector in room 2 does not turn on.',category:'Facilities',priority:'high' },erin);
+      for (const path of ['/admin/overview','/admin/users','/admin/assignees','/admin/security']) assert.equal((await call(path,'GET',undefined,erin)).statusCode,403);
+      assert.equal((await call(`/admin/users/${alice.id}/sign-out`,'POST',{},erin)).statusCode,403);
+      const overview = (await call('/admin/overview','GET',undefined,alice)).json;
+      assert.equal(overview.people.total,(await db.query('SELECT count(*)::int AS count FROM users')).rows[0].count);
+      assert.equal(overview.people.blocked,1);
+      assert.ok(overview.waiting.some(item => item.id === created.json.ticket.id && item.priority === 'high'));
+      assert.ok(overview.tickets.unassigned >= 1 && overview.lastDay.failed_sign_ins >= 1);
+      const found = (await call('/admin/users?search=ERIN','GET',undefined,alice)).json.users;
+      assert.deepEqual(found.map(u => u.email),['erin@example.com']); assert.equal(found[0].signed_in,true); assert.equal(found[0].tickets,1); assert.ok(found[0].last_sign_in);
+      assert.deepEqual((await call('/admin/users?role=blocked','GET',undefined,alice)).json.users.map(u => u.email),['bob@example.com']);
+      assert.equal((await call("/admin/users?search="+encodeURIComponent("' OR 1=1 --"),'GET',undefined,alice)).json.users.length,0);
+      assert.equal((await call('/admin/users?role=superuser','GET',undefined,alice)).statusCode,400);
+      assert.equal((await call('/admin/users?offset=-1','GET',undefined,alice)).statusCode,400);
+      assert.ok(!(await call('/admin/assignees','GET',undefined,alice)).json.users.some(u => u.id === bob.id));
+      const log = (await call('/admin/security?event=ticket_created','GET',undefined,alice)).json;
+      assert.ok(log.events.length >= 1 && log.events.every(item => item.event === 'ticket_created'));
+      assert.ok(log.events.some(item => item.actor === 'erin@example.com' && item.target === 'Projector broken'));
+      assert.ok(log.eventTypes.includes('login_success'));
+      assert.equal((await call("/admin/security?event=x'--",'GET',undefined,alice)).statusCode,400);
+      assert.equal((await call(`/admin/users/${alice.id}/sign-out`,'POST',{},alice)).statusCode,400);
+      assert.equal((await call(`/admin/users/${erin.id}/sign-out`,'POST',{ force:true },alice)).statusCode,400);
+      assert.equal((await call('/admin/users/00000000-0000-4000-8000-000000000000/sign-out','POST',{},alice)).statusCode,404);
+      assert.equal((await call(`/admin/users/${erin.id}/sign-out`,'POST',{},alice)).statusCode,200);
+      assert.equal((await call('/auth/me','GET',undefined,erin)).statusCode,401);
+      assert.equal((await db.query("SELECT count(*)::int AS count FROM audit_events WHERE event='sessions_revoked_by_admin' AND actor_id=$1 AND target_id=$2",[alice.id,erin.id])).rows[0].count,1);
     });
     await t.test('webhook success and failure are recorded without leaking destination secrets',async () => {
       const originalFetch = globalThis.fetch;

@@ -44,7 +44,7 @@ Open **http://localhost:8888**. Register an account. To make it the initial admi
 npm run admin -- your-email@example.com
 ```
 
-Sign in again. Register separate student and staff accounts, promote the support account through **People**, and assign tickets through their details pages. Staff only see their own or assigned tickets; administrators see all tickets.
+Sign in again. **Admin overview** shows open and unassigned requests, staff workload and the last day's failed sign-ins. Register separate student and staff accounts, promote the support account through **People** (searchable, filterable by role, with remote sign-out), and assign tickets through their details pages. **Security activity** lists alerts and a filterable audit log. Staff only see their own or assigned tickets; administrators see all tickets.
 
 The compose database password is for local development only. The local HTTP cookie intentionally omits `Secure`; production requires HTTPS and uses a `__Host-` cookie. This app is not a browser-only demo: sign-in and tickets require a working database and valid environment configuration.
 
@@ -70,7 +70,7 @@ Integration tests run in an isolated, in-memory PostgreSQL engine and do not use
 
    For least privilege, create a separate runtime role in Neon with only SELECT/INSERT/UPDATE/DELETE on these tables and use it in the pooled `DATABASE_URL`.
 3. Import this GitHub repository into Netlify. `netlify.toml` configures `public` and `netlify/functions`. This is a Git-based Functions deployment; uploading only `public` will not deploy the backend.
-4. Set server-side environment variables for Functions (Site configuration → Environment variables, scope **Functions**): `DATABASE_URL` (the pooled Neon URL), `APP_ORIGIN` (exact HTTPS origin without a trailing slash), `RATE_LIMIT_SECRET` (random 32+ characters), and `NODE_ENV=production`. Optionally set `ALERT_WEBHOOK_URL` to your team's HTTPS JSON receiver. Never expose these as frontend configuration.
+4. Set server-side environment variables for Functions (Site configuration → Environment variables, scope **Functions**): `DATABASE_URL` (the pooled Neon URL), `APP_ORIGIN` (exact HTTPS origin without a trailing slash), `RATE_LIMIT_SECRET` (random 32+ characters), and `NODE_ENV=production`. Optionally set `ALERT_WEBHOOK_URL` to your team's HTTPS JSON receiver, and `PASSWORD_RESET_WEBHOOK_URL` to an HTTPS endpoint that emails the `link` it receives to the `email` address (without it, password reset requests are accepted but no link is sent). Never expose these as frontend configuration.
 5. Deploy, register the initial administrator account, and run the admin command locally against the target database using protected environment variables.
 6. Verify registration, login, logout, two-user isolation, staff assignment, CSRF rejection, headers, cookies, alert delivery, and log access on the deployed URL. Review hosting traffic controls, usage limits, monitoring and spend alerts for your actual Netlify plan.
 7. Replace the deployment placeholder above and fill in team names. Keep previews isolated from production data and secrets; their origin must match their own configuration.
@@ -81,7 +81,7 @@ Netlify static headers are configured separately from API response headers. Chec
 
 See [security controls](docs/SECURITY-CONTROLS.md), [threat model](docs/THREAT-MODEL.md), and [lab demonstration](docs/LAB-DEMO.md).
 
-The project uses defense in depth against relevant weaknesses. It does **not** claim protection against every CWE or immunity to DDoS. Email ownership verification, password recovery, MFA, durable notification retries, and large-scale operations are outside this first implementation. Do not use it for sensitive real-world support cases without further review.
+The project uses defense in depth against relevant weaknesses. It does **not** claim protection against every CWE or immunity to DDoS. Email ownership verification, MFA, durable notification retries, and large-scale operations are outside this first implementation. Do not use it for sensitive real-world support cases without further review.
 
 ## Repository workflow
 

@@ -1,0 +1,3 @@
+BEGIN;
+ALTER TABLE replies ADD COLUMN IF NOT EXISTS internal boolean NOT NULL DEFAULT false;
+COMMIT;
